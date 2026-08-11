@@ -2,6 +2,11 @@
 
 DOMAIN = "accuweather"
 
+# Shown on the device page. Keep VERSION in step with manifest.json — the device
+# page used to advertise 2026.4.22 while the manifest had moved on.
+MANUFACTURER = "TriTue2011"
+VERSION = "2026.8.11"
+
 # Config flow
 CONF_LOCATION_KEY = "location_key"
 CONF_LOCATION_NAME = "location_name"

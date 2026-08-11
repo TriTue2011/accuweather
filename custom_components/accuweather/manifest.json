@@ -2,14 +2,14 @@
   "domain": "accuweather",
   "name": "AccuWeather",
   "codeowners": [
-      "@smarthomeblack"
+      "@TriTue2011"
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/smarthomeblack/accuweather",
+  "documentation": "https://github.com/TriTue2011/accuweather",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/smarthomeblack/accuweather/issues",
+  "issue_tracker": "https://github.com/TriTue2011/accuweather/issues",
   "requirements": ["beautifulsoup4"],
   "version": "2026.8.11"
 }

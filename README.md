@@ -42,7 +42,7 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 
 #### Phương pháp 1: Nút "Thêm vào HACS" (đơn giản nhất)
 
-[![Thêm vào HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeblack&repository=accuweather&category=integration)
+[![Thêm vào HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=TriTue2011&repository=accuweather&category=integration)
 
 1. Nhấp vào nút "Thêm vào HACS" ở trên (hoạt động khi bạn đã đăng nhập vào Home Assistant).
 2. Xác nhận thêm kho lưu trữ vào HACS.
@@ -50,27 +50,27 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 4. Khởi động lại Home Assistant.
 5. Thêm tích hợp: Cài đặt > Thiết bị & Dịch vụ > Thêm tích hợp > accuweather.
 6. Chọn tỉnh/thành phố và quận/huyện mà bạn muốn hiển thị thông tin thời tiết.
-7. Tùy chọn cấu hình thời gian cập nhật (mặc định là 10 phút).
+7. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút).
 
 
 ### Cài đặt thủ công
 
-1. Tải xuống [bản phát hành mới nhất](https://github.com/smarthomeblack/accuweather/releases) hoặc sao chép nội dung repository.
+1. Tải xuống [bản phát hành mới nhất](https://github.com/TriTue2011/accuweather/releases) hoặc sao chép nội dung repository.
 2. Sao chép thư mục `custom_components/accuweather` vào thư mục `custom_components` trong cài đặt Home Assistant của bạn.
 3. Khởi động lại Home Assistant.
 4. Thêm tích hợp: Cài đặt > Thiết bị & Dịch vụ > Thêm tích hợp > accuweather.
 5. Chọn tỉnh/thành phố và quận/huyện mà bạn muốn hiển thị thông tin thời tiết.
-6. Tùy chọn cấu hình thời gian cập nhật (mặc định là 10 phút).
+6. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút).
 
 ## Cấu hình
 
 Bạn có thể thay đổi cấu hình của tích hợp bất cứ lúc nào:
 
 1. Đi tới Cài đặt > Thiết bị & Dịch vụ
-2. Tìm tích hợp Weather Vn và nhấn vào Tùy chọn
+2. Tìm tích hợp AccuWeather và nhấn vào Tùy chọn
 3. Cấu hình:
    - Chọn tỉnh/thành phố
-   - Cài đặt thời gian cập nhật (từ 5 đến 60 phút)
+   - Cài đặt thời gian cập nhật (từ 3 đến 60 phút)
    - Chọn quận/huyện
 
 ## Sử dụng
@@ -153,4 +153,4 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
 ## Đóng góp
 
-Mọi đóng góp đều được hoan nghênh. Vui lòng tạo issues hoặc pull requests trên [GitHub](https://github.com/smarthomeblack/accuweather).
+Mọi đóng góp đều được hoan nghênh. Vui lòng tạo issues hoặc pull requests trên [GitHub](https://github.com/TriTue2011/accuweather).

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN
+from .const import DOMAIN, MANUFACTURER, VERSION
 
 
 def get_device_info(location_key: str, location_name: str) -> DeviceInfo:
@@ -11,9 +11,9 @@ def get_device_info(location_key: str, location_name: str) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, location_key)},
         name=f"AccuWeather {location_name}",
-        manufacturer="smarthomeblack",
+        manufacturer=MANUFACTURER,
         model="AccuWeather",
-        sw_version="2026.4.22",
+        sw_version=VERSION,
         configuration_url=f"https://www.accuweather.com/vi/search-locations?query={location_name}",
         entry_type="service",
     )
