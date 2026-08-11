@@ -23,7 +23,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    LANDFALL_MODEL_PRIORITY,
+    STORM_SLOTS,
+    STORM_TRACK_POINTS,
+)
 from .coordinator import AccuWeatherDataUpdateCoordinator
 from .device import get_device_info
 
@@ -164,6 +169,39 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.METERS,
     ),
+    SensorEntityDescription(
+        key="heat_index",
+        name="Heat Index",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    SensorEntityDescription(
+        key="aqi",
+        name="Air Quality Index",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:air-filter",
+    ),
+    SensorEntityDescription(
+        key="aqi_category",
+        name="Air Quality Category",
+        icon="mdi:air-filter",
+    ),
+    SensorEntityDescription(
+        key="sunrise",
+        name="Sunrise",
+        icon="mdi:weather-sunset-up",
+    ),
+    SensorEntityDescription(
+        key="sunset",
+        name="Sunset",
+        icon="mdi:weather-sunset-down",
+    ),
+    SensorEntityDescription(
+        key="moon_phase",
+        name="Moon Phase",
+        icon="mdi:moon-waning-crescent",
+    ),
     # MinuteCast sensor
     SensorEntityDescription(
         key="minutecast",
@@ -171,6 +209,47 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         icon="mdi:radar",
     ),
 )
+
+# Storm tracking sensors, fed by Windy's tropical cyclone feed.
+STORM_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="storm_count",
+        name="Storm Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:weather-hurricane",
+    ),
+    SensorEntityDescription(
+        key="storm_nearby_count",
+        name="Nearby Storm Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:weather-hurricane",
+    ),
+    SensorEntityDescription(
+        key="storm_nearest_distance",
+        name="Nearest Storm Distance",
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+    ),
+    SensorEntityDescription(
+        key="storm_movement",
+        name="Nearest Storm Movement",
+        icon="mdi:compass-outline",
+    ),
+    SensorEntityDescription(
+        key="storm_landfall",
+        name="Nearest Storm Landfall",
+        icon="mdi:map-marker-alert",
+    ),
+    SensorEntityDescription(
+        key="weather_alerts",
+        name="Weather Alerts",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:alert-outline",
+    ),
+)
+
+NO_STORM = "Không có bão"
 
 
 async def async_setup_entry(
@@ -186,7 +265,15 @@ async def async_setup_entry(
     # Add static sensor types
     for description in SENSOR_TYPES:
         entities.append(AccuWeatherSensorEntity(coordinator, description))
-    
+
+    # Storm tracking (Windy). One sensor per slot so the entity ids stay stable
+    # as storms form and dissipate, plus the summary sensors.
+    for description in STORM_SENSOR_TYPES:
+        entities.append(AccuWeatherStormSummarySensor(coordinator, description))
+
+    for slot in range(STORM_SLOTS):
+        entities.append(AccuWeatherStormSensor(coordinator, slot))
+
     # Add dynamic health activity sensors
     health_count = 0
     if coordinator.data and "health_activities" in coordinator.data:
@@ -290,21 +377,18 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
             elif key == "wind_speed":
                 return current.get("wind_speed")
             elif key == "wind_bearing":
-                bearing = current.get("wind_bearing")
-                # Convert Vietnamese direction to English
-                direction_map = {
-                    "B": "N", "BĐB": "NNE", "ĐB": "NE", "ĐĐB": "ENE",
-                    "Đ": "E", "ĐĐN": "ESE", "ĐN": "SE", "NĐN": "SSE",
-                    "N": "S", "NTN": "SSW", "TN": "SW", "TTN": "WSW",
-                    "T": "W", "TTB": "WNW", "TB": "NW", "BTB": "NNW"
-                }
-                return direction_map.get(bearing, bearing) if bearing else None
+                # Converted from Vietnamese initials while parsing.
+                return current.get("wind_bearing_text")
             elif key == "visibility":
                 return current.get("visibility")
             elif key == "cloud_coverage":
                 return current.get("cloud_coverage")
             elif key == "uv_index":
                 return current.get("uv_index")
+            elif key == "heat_index":
+                return current.get("heat_index")
+            elif key in ("sunrise", "sunset", "moon_phase"):
+                return current.get(key)
             elif key == "dew_point":
                 dew_val = details.get("Điểm sương")
                 if dew_val:
@@ -330,10 +414,15 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
         # Air quality sensors
         if "air_quality" in self.coordinator.data:
             air_data = self.coordinator.data["air_quality"]
-            
+
+            if key == "aqi":
+                return air_data.get("aqi")
+            if key == "aqi_category":
+                return air_data.get("category")
+
             # Individual pollutants
             pollutants = air_data.get("pollutants", {})
-            
+
             if key in _POLUTANT_KEY_MAP and _POLUTANT_KEY_MAP[key] in pollutants:
                 pollutant_data = pollutants[_POLUTANT_KEY_MAP[key]]
                 value = pollutant_data.get("value")
@@ -374,8 +463,9 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
                     ("pm25", "pm10", "ozone", "nitrogen", "sulfur", "carbon")):
             air_data = self.coordinator.data["air_quality"]
             attrs.update({
-                "description": air_data.get("desc"),
+                "description": air_data.get("description"),
                 "category": air_data.get("category"),
+                "aqi": air_data.get("aqi"),
             })
             
             # Add specific pollutant details
@@ -400,6 +490,201 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
                     "forecast_type": minutecast.get("forecast_type"),
                 })
         
+        return attrs
+
+
+class AccuWeatherStormSummarySensor(
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity
+):
+    """Summary of the tropical cyclone situation from Windy."""
+
+    def __init__(
+        self,
+        coordinator: AccuWeatherDataUpdateCoordinator,
+        description: SensorEntityDescription,
+    ) -> None:
+        """Initialize the storm summary sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_name = f"AccuWeather {coordinator.location_name} {description.name}"
+        self._attr_unique_id = f"accuweather_{coordinator.location_key}_{description.key}"
+        self._attr_device_info = get_device_info(
+            coordinator.location_key, coordinator.location_name
+        )
+
+    @property
+    def _storms(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        return self.coordinator.data.get("storms") or {}
+
+    @property
+    def native_value(self) -> Any:
+        """Return the state of the sensor."""
+        key = self.entity_description.key
+        storms = self._storms
+        nearest = storms.get("nearest") or {}
+
+        if key == "storm_count":
+            return storms.get("count", 0)
+        if key == "storm_nearby_count":
+            return storms.get("nearby_count", 0)
+        if key == "storm_nearest_distance":
+            return nearest.get("distance_km")
+        if key == "storm_movement":
+            if not nearest:
+                return NO_STORM
+            return nearest.get("movement_text") or "Chưa xác định hướng di chuyển"
+        if key == "storm_landfall":
+            if not nearest:
+                return NO_STORM
+            return nearest.get("landfall_text") or "Chưa có dấu hiệu vào đất liền"
+        if key == "weather_alerts":
+            return len(self.coordinator.data.get("alerts") or [])
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        key = self.entity_description.key
+        storms = self._storms
+        attrs: dict[str, Any] = {"location_key": self.coordinator.location_key}
+
+        if key == "weather_alerts":
+            attrs["alerts"] = self.coordinator.data.get("alerts") or []
+            return attrs
+
+        if key in ("storm_count", "storm_nearby_count"):
+            # Every active system, closest first, so a card can list them all.
+            attrs["storms"] = [
+                {
+                    "name": storm.get("name"),
+                    "distance_km": storm.get("distance_km"),
+                    "direction_from_home": storm.get("direction_from_home"),
+                    "wind_speed_kmh": storm.get("wind_speed_kmh"),
+                    "beaufort": storm.get("beaufort"),
+                    "classification": storm.get("classification"),
+                    "movement": storm.get("movement_text"),
+                    "landfall": storm.get("landfall_text"),
+                }
+                for storm in storms.get("storms", [])
+            ]
+            return attrs
+
+        nearest = storms.get("nearest") or {}
+        if nearest:
+            attrs.update({
+                "name": nearest.get("name"),
+                "latitude": nearest.get("latitude"),
+                "longitude": nearest.get("longitude"),
+                "distance_km": nearest.get("distance_km"),
+                "direction_from_home": nearest.get("direction_from_home"),
+                "wind_speed_kmh": nearest.get("wind_speed_kmh"),
+                "beaufort": nearest.get("beaufort"),
+                "classification": nearest.get("classification"),
+                "movement_direction": nearest.get("movement_direction"),
+                "movement_speed_kmh": nearest.get("movement_speed_kmh"),
+                "nearest_coast": nearest.get("nearest_coast"),
+                "distance_to_coast_km": nearest.get("distance_to_coast_km"),
+                "landfall": nearest.get("landfall"),
+            })
+        return attrs
+
+
+class AccuWeatherStormSensor(
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity
+):
+    """One active tropical cyclone, ordered by distance from the location."""
+
+    _attr_icon = "mdi:weather-hurricane"
+
+    def __init__(
+        self,
+        coordinator: AccuWeatherDataUpdateCoordinator,
+        slot: int,
+    ) -> None:
+        """Initialize a storm slot sensor."""
+        super().__init__(coordinator)
+        self._slot = slot
+        self.entity_description = SensorEntityDescription(
+            key=f"storm_{slot + 1}",
+            name=f"Storm {slot + 1}",
+            icon="mdi:weather-hurricane",
+        )
+        self._attr_name = (
+            f"AccuWeather {coordinator.location_name} Storm {slot + 1}"
+        )
+        self._attr_unique_id = (
+            f"accuweather_{coordinator.location_key}_storm_{slot + 1}"
+        )
+        self._attr_device_info = get_device_info(
+            coordinator.location_key, coordinator.location_name
+        )
+
+    @property
+    def _storm(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        storms = (self.coordinator.data.get("storms") or {}).get("storms") or []
+        if self._slot >= len(storms):
+            return None
+        return storms[self._slot]
+
+    @property
+    def native_value(self) -> Any:
+        """Return the storm name, or a plain "no storm" for an unused slot."""
+        storm = self._storm
+        if not storm:
+            return NO_STORM
+        name = storm.get("name") or "?"
+        classification = storm.get("classification")
+        return f"{classification} {name}" if classification else name
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return everything known about this storm."""
+        storm = self._storm
+        if not storm:
+            return {"location_key": self.coordinator.location_key}
+
+        attrs: dict[str, Any] = {
+            "location_key": self.coordinator.location_key,
+            "name": storm.get("name"),
+            "latitude": storm.get("latitude"),
+            "longitude": storm.get("longitude"),
+            "distance_km": storm.get("distance_km"),
+            "direction_from_home": storm.get("direction_from_home"),
+            "wind_speed_kmh": storm.get("wind_speed_kmh"),
+            "beaufort": storm.get("beaufort"),
+            "classification": storm.get("classification"),
+            "pressure_hpa": storm.get("pressure_hpa"),
+            "observed_at": storm.get("observed_at"),
+            "movement": storm.get("movement_text"),
+            "movement_direction": storm.get("movement_direction"),
+            "movement_speed_kmh": storm.get("movement_speed_kmh"),
+            "landfall": storm.get("landfall_text"),
+            "landfall_details": storm.get("landfall"),
+            "nearest_coast": storm.get("nearest_coast"),
+            "distance_to_coast_km": storm.get("distance_to_coast_km"),
+            "forecast_models": storm.get("forecast_models"),
+        }
+
+        # Trim the tracks: full history can run to 56 points per storm, and
+        # everything here is written to the state machine on every update.
+        if history := storm.get("history"):
+            attrs["track_history"] = history[:STORM_TRACK_POINTS]
+        forecast = storm.get("forecast") or {}
+        models = storm.get("forecast_models") or []
+        # Same trust order as the landfall estimate, so the track shown and the
+        # landfall text describe the same forecast.
+        ordered = [m for m in LANDFALL_MODEL_PRIORITY if m in models]
+        ordered += [m for m in models if m not in ordered]
+        for model in ordered:
+            track = (forecast.get(model) or {}).get("track") or []
+            if track:
+                attrs["track_forecast_model"] = model
+                attrs["track_forecast"] = track[:STORM_TRACK_POINTS]
+                break
         return attrs
 
 

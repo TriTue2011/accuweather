@@ -4,14 +4,29 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 
 ## Tính năng
 
-- Hiển thị thông tin thời tiết hiện tại: nhiệt độ, độ ẩm, điều kiện thời tiết, tốc độ gió, điểm sương, chỉ số UV...
-- Dự báo thời tiết theo ngày (5 ngày tới)
-- Dự báo thời tiết theo giờ (48 giờ tới)
-- Hiển thị thông tin chất lượng không khí: AQI, PM2.5, PM10, O3, SO2, NO2, CO
-- Hỗ trợ đầy đủ 63 tỉnh thành và hầu hết quận/huyện tại Việt Nam
-- Phân loại theo 8 vùng miền địa lý của Việt Nam
-- Tùy chọn cấu hình thời gian cập nhật dữ liệu (5-180 phút)
-- Hỗ trợ đa ngôn ngữ cho giao diện cấu hình
+**Thời tiết (nguồn AccuWeather)**
+
+- Thời tiết hiện tại: nhiệt độ, RealFeel, chỉ số nhiệt, độ ẩm, điểm sương, khí áp kèm xu hướng, gió và gió giật, tầm nhìn, mật độ mây, trần mây, chỉ số UV
+- Mặt trời và mặt trăng: giờ mọc/lặn, độ dài ngày, pha mặt trăng
+- Dự báo 15 ngày: nhiệt cao/thấp, xác suất mưa, số giờ mưa, UV tối đa, RealFeel và RealFeel Shade, gió
+- Dự báo 72 giờ (3 ngày, mức miễn phí của AccuWeather), mỗi giờ có đầy đủ chi tiết
+- Chất lượng không khí: chỉ số AQI, phân loại, 6 chất ô nhiễm (PM2.5, PM10, O3, NO2, SO2, CO) kèm AQI riêng, và dự báo AQI 4 ngày
+- MinuteCast: tóm tắt mưa và bảng 240 phút
+- 22 chỉ số sức khỏe & hoạt động (hen suyễn, viêm khớp, chạy bộ, câu cá, lái xe, muỗi...)
+
+**Theo dõi bão (nguồn Windy, không cần API key)**
+
+- Danh sách mọi cơn bão đang hoạt động, sắp theo khoảng cách tới vị trí của bạn
+- Mỗi cơn bão một sensor riêng (`Storm 1/2/3`), kèm: cấp bão theo thang Việt Nam (áp thấp nhiệt đới → siêu bão), cấp Beaufort, sức gió km/h, áp suất, khoảng cách và bão đang ở phía nào
+- **Hướng di chuyển** viết bằng chữ, ví dụ „Di chuyển hướng Tây Bắc, 21 km/h", suy ra từ hai điểm quỹ đạo gần nhất
+- **Dự kiến vào đất liền**: tỉnh ven biển mà đường bão hướng tới và thời điểm, ví dụ „Dự kiến vào khu vực Quảng Bình khoảng 2026-08-13 12:00 (theo JMA)". Đường đi lấy theo thứ tự tin cậy JMA → ECMWF → các mô hình khác, và quỹ đạo quá khứ lẫn dự báo được lưu trong thuộc tính để vẽ lên bản đồ
+- Cảnh báo thời tiết chính thức (CAP) cho vị trí đã chọn
+
+**Khác**
+
+- Hỗ trợ mọi địa điểm AccuWeather có (tìm theo tên, gồm 63 tỉnh thành và hầu hết quận/huyện)
+- Tự nhận đơn vị của trang và quy đổi về °C, km/h, km, mm — không bị đọc 90°F thành 90°C
+- Tùy chọn thời gian cập nhật (5–60 phút, mặc định 15 phút)
 
 ## Cài đặt
 
@@ -54,11 +69,47 @@ Bạn có thể thay đổi cấu hình của tích hợp bất cứ lúc nào:
 
 Sau khi cài đặt, các entity sau sẽ được tạo ra:
 
-- Entity `weather.ten_quan_huyen`: Thông tin thời tiết hiện tại và dự báo
-- Entity `sensor.ten_quan_huyen_air_quality`: Chỉ số chất lượng không khí tổng hợp
-- Các entity cảm biến chất lượng không khí riêng lẻ: pm2.5, pm10, o3, no2, co, so2,...
+- `weather.accuweather_<địa_điểm>`: thời tiết hiện tại, dự báo ngày và dự báo giờ
+- Cảm biến thời tiết: RealFeel, chỉ số nhiệt, độ ẩm, khí áp, gió, gió giật, hướng gió, tầm nhìn, mật độ mây, trần mây, điểm sương, UV, giờ mặt trời mọc/lặn, pha mặt trăng
+- Cảm biến không khí: `Air Quality Index`, `Air Quality Category`, và từng chất PM2.5, PM10, O3, NO2, SO2, CO
+- Cảm biến MinuteCast: tóm tắt mưa 2 giờ tới
+- 22 cảm biến sức khỏe & hoạt động
+- Cảm biến bão: `Storm Count`, `Nearby Storm Count`, `Nearest Storm Distance`, `Nearest Storm Movement`, `Nearest Storm Landfall`, `Storm 1`, `Storm 2`, `Storm 3`, `Weather Alerts`
 
-Bạn có thể thêm thẻ Weather và các cảm biến vào dashboard để hiển thị thông tin.
+### Ví dụ tự động hoá: báo khi bão hướng vào đất liền
+
+```yaml
+automation:
+  - alias: Cảnh báo bão vào đất liền
+    triggers:
+      - trigger: state
+        entity_id: sensor.accuweather_ha_noi_nearest_storm_landfall
+    conditions:
+      - condition: template
+        value_template: "{{ 'Dự kiến vào khu vực' in trigger.to_state.state }}"
+    actions:
+      - action: notify.mobile_app
+        data:
+          title: >-
+            {{ state_attr('sensor.accuweather_ha_noi_storm_1', 'name') }} —
+            {{ state_attr('sensor.accuweather_ha_noi_storm_1', 'classification') }}
+          message: >-
+            {{ states('sensor.accuweather_ha_noi_nearest_storm_movement') }}.
+            {{ trigger.to_state.state }}.
+            Cách {{ states('sensor.accuweather_ha_noi_nearest_storm_distance') }} km.
+```
+
+### Xem bản đồ bão trong Home Assistant
+
+Thêm một thẻ `iframe` vào dashboard (không cần API key):
+
+```yaml
+type: iframe
+url: https://embed.windy.com/embed2.html?lat=16&lon=112&zoom=5&overlay=hurricanes&product=ecmwf&metricWind=km%2Fh&metricTemp=%C2%B0C
+aspect_ratio: 75%
+```
+
+Đổi `overlay=hurricanes` thành `radar`, `waves` hoặc `gust` để xem lớp khác.
 
 ## Các tỉnh/thành phố hỗ trợ
 
@@ -79,15 +130,15 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
 ## Chú ý
 
-- Dữ liệu được cập nhật tự động theo thời gian cấu hình (mặc định là 10 phút)
-- Độ chính xác của dữ liệu phụ thuộc vào nguồn cung cấp (accuweather)
-- Một số khu vực có thể không có đủ dữ liệu chi tiết
-
+- Dữ liệu cập nhật theo thời gian đã cấu hình (mặc định 15 phút). Mỗi lượt cập nhật tải 8 trang AccuWeather, nên đặt dưới 10 phút sẽ tăng nguy cơ bị chặn.
+- **Nếu tất cả entity thành „unavailable"**: xem log Home Assistant. Khi thấy thông báo „AccuWeather từ chối yêu cầu (HTTP 403)" thì mạng của bạn đang bị hệ thống chống bot của AccuWeather chặn — không phải lỗi cấu hình. Thử đổi mạng/DNS hoặc tăng thời gian cập nhật. Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
+- Dữ liệu bão lấy từ endpoint công khai của Windy, gộp sẵn JMA, NOAA NHC, UKMO, BoM, IMD cùng các mô hình tự dò trên ECMWF/GFS/ICON. Endpoint này không có tài liệu chính thức nên có thể thay đổi; khi đó các sensor bão sẽ trống chứ không làm hỏng phần thời tiết.
+- **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.
+- Độ chính xác của dữ liệu thời tiết phụ thuộc AccuWeather; một số khu vực không có đủ dữ liệu chi tiết (ví dụ nơi không có chỉ số phấn hoa hoặc MinuteCast).
 
 ## Phát triển trong tương lai
 
 - Thêm hỗ trợ cho các khu vực du lịch đặc biệt
-- Tích hợp dữ liệu cảnh báo thiên tai
 - Cải thiện giao diện và hiển thị dữ liệu
 - Tùy chọn hiển thị đơn vị đo (metric/imperial)
 

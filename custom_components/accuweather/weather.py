@@ -132,28 +132,12 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
 
     @property
     def wind_bearing(self) -> float | str | None:
-        """Return the wind bearing."""
+        """Return the wind bearing in degrees."""
         if not self.coordinator.data or "current" not in self.coordinator.data:
             return None
-        
-        current = self.coordinator.data["current"]
-        wind_bearing = current.get("wind_bearing")
-        
-        # Convert Vietnamese wind directions to standard
-        if isinstance(wind_bearing, str):
-            direction_map = {
-                "B": "N",
-                "TN": "NE", 
-                "T": "E",
-                "TD": "SE",
-                "Đ": "S",
-                "ĐB": "SW",
-                "TB": "W",
-                "BTB": "NW"
-            }
-            return direction_map.get(wind_bearing.upper(), wind_bearing)
-        
-        return wind_bearing
+
+        # Already converted from Vietnamese initials to degrees while parsing.
+        return self.coordinator.data["current"].get("wind_bearing")
 
     @property
     def native_visibility(self) -> float | None:
@@ -255,60 +239,60 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
         
         forecasts = []
         base_date = dt_util.now()
-        
+
         for i, day in enumerate(daily_data):
-            # Parse date string to datetime
-            date_str = day.get("datetime")
-            if not date_str:
-                continue
-            
-            try:
-                # Parse Vietnamese date format like "Th 5 18/9", "CN 21/9", "Th 2 22/9"
-                import re
-                
-                # Extract day and month from format like "Th 5 18/9" or "CN 21/9"
-                match = re.search(r"(\d+)/(\d+)", date_str)
-                if match:
-                    day_num = int(match.group(1))
-                    month_num = int(match.group(2))
-                    
-                    # Use current year
-                    year = base_date.year
-                    
-                    # Handle year rollover (if month is less than current month, it's next year)
-                    current_month = base_date.month
-                    if month_num < current_month:
-                        year += 1
-                    
-                    try:
-                        forecast_date = datetime(year, month_num, day_num, 12, 0, 0)
-                    except ValueError:
-                        # Invalid date, use fallback
-                        forecast_date = base_date + timedelta(days=i)
-                        forecast_date = forecast_date.replace(hour=12, minute=0, second=0, microsecond=0)
-                else:
-                    # Fallback: use base date + index
-                    forecast_date = base_date + timedelta(days=i)
-                    forecast_date = forecast_date.replace(hour=12, minute=0, second=0, microsecond=0)
-            except Exception:
-                # Fallback: use base date + index  
-                forecast_date = base_date + timedelta(days=i)
-                forecast_date = forecast_date.replace(hour=12, minute=0, second=0, microsecond=0)
-            
+            forecast_date = self._daily_forecast_date(day, base_date, i)
+
             forecast = Forecast(
                 datetime=forecast_date.isoformat(),
                 condition=day.get("condition"),
                 native_temperature=day.get("native_temperature"),
                 native_templow=day.get("native_templow"),
+                native_apparent_temperature=day.get("realfeel"),
                 precipitation_probability=day.get("precipitation_probability"),
+                native_precipitation=day.get("precipitation"),
                 humidity=day.get("humidity"),
                 native_wind_speed=day.get("wind_speed"),
+                native_wind_gust_speed=day.get("wind_gust_speed"),
                 wind_bearing=day.get("wind_bearing"),
+                cloud_coverage=day.get("cloud_coverage"),
                 uv_index=day.get("uv_index"),
             )
             forecasts.append(forecast)
-        
+
         return forecasts
+
+    @staticmethod
+    def _daily_forecast_date(
+        day: dict[str, Any], base_date: datetime, index: int
+    ) -> datetime:
+        """Build a timezone-aware noon timestamp for one forecast day.
+
+        Home Assistant rejects naive datetimes in forecasts, so the local time
+        zone is attached explicitly rather than relying on the default.
+        """
+        day_num = day.get("date_day")
+        month_num = day.get("date_month")
+
+        if day_num and month_num:
+            year = base_date.year
+            # The list runs forward from today, so a month before the current one
+            # means the list has crossed into January.
+            if month_num < base_date.month:
+                year += 1
+            try:
+                return datetime(
+                    year, month_num, day_num, 12, 0, 0,
+                    tzinfo=base_date.tzinfo,
+                )
+            except ValueError:
+                _LOGGER.debug(
+                    "Invalid forecast date %s/%s, falling back to today+%d",
+                    day_num, month_num, index,
+                )
+
+        fallback = base_date + timedelta(days=index)
+        return fallback.replace(hour=12, minute=0, second=0, microsecond=0)
 
     async def async_forecast_hourly(self) -> list[Forecast] | None:
         """Return the hourly forecast."""
@@ -321,26 +305,50 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
         
         forecasts = []
         base_date = dt_util.now().replace(minute=0, second=0, microsecond=0)
-        
+
         for i, hour in enumerate(hourly_data):
-            # Calculate datetime for this hour
-            forecast_date = base_date.replace(hour=(base_date.hour + i) % 24)
-            if base_date.hour + i >= 24:
-                forecast_date = forecast_date.replace(day=forecast_date.day + 1)
-            
+            forecast_date = self._hourly_forecast_date(hour, base_date, i)
+
             forecast = Forecast(
                 datetime=forecast_date.isoformat(),
                 condition=hour.get("condition"),
                 native_temperature=hour.get("native_temperature"),
                 native_apparent_temperature=hour.get("native_apparent_temperature"),
                 precipitation_probability=hour.get("precipitation_probability"),
+                native_precipitation=hour.get("precipitation"),
                 humidity=hour.get("humidity"),
                 native_wind_speed=hour.get("wind_speed"),
+                native_wind_gust_speed=hour.get("wind_gust_speed"),
                 wind_bearing=hour.get("wind_bearing"),
                 cloud_coverage=hour.get("cloud_coverage"),
                 uv_index=hour.get("uv_index"),
                 native_visibility=hour.get("visibility"),
+                native_dew_point=hour.get("dew_point"),
             )
             forecasts.append(forecast)
-        
+
         return forecasts
+
+    @staticmethod
+    def _hourly_forecast_date(
+        hour: dict[str, Any], base_date: datetime, index: int
+    ) -> datetime:
+        """Build a timezone-aware timestamp for one forecast hour.
+
+        Each row carries its own epoch timestamp, which is exact. The hour label
+        plus the page's forecast day is the fallback when that attribute is gone.
+        """
+        if timestamp := hour.get("timestamp"):
+            return datetime.fromtimestamp(timestamp, tz=base_date.tzinfo)
+
+        hour_of_day = hour.get("hour")
+        if hour_of_day is None:
+            return base_date + timedelta(hours=index)
+
+        day_offset = hour.get("day_offset") or 0
+        stamp = (base_date + timedelta(days=day_offset)).replace(hour=hour_of_day)
+        # Rows on the "today" page that sit before the current hour belong to
+        # tomorrow (the page rolls over at midnight).
+        if day_offset == 0 and hour_of_day < base_date.hour:
+            stamp += timedelta(days=1)
+        return stamp

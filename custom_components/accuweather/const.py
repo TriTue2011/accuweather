@@ -7,14 +7,138 @@ CONF_LOCATION_KEY = "location_key"
 CONF_LOCATION_NAME = "location_name"
 CONF_UPDATE_INTERVAL = "update_interval"
 
-# Update intervals
-DEFAULT_UPDATE_INTERVAL = 600  # 10 minutes
+# Update intervals. Each cycle now loads eight AccuWeather pages (current, daily,
+# three hourly days, air quality, health, MinuteCast), so the default is spaced
+# out to keep the request rate low enough to stay under the bot protection.
+DEFAULT_UPDATE_INTERVAL = 900  # 15 minutes
 MIN_UPDATE_INTERVAL = 300     # 5 minutes
 MAX_UPDATE_INTERVAL = 3600    # 60 minutes
+
+# Hourly forecast days to fetch. AccuWeather serves day 1..3 (72 hours) without
+# a Premium+ subscription; beyond that the pages are paywalled.
+HOURLY_DAYS = 3
 
 # API URLs
 BASE_URL = "https://www.accuweather.com"
 AUTOCOMPLETE_URL = f"{BASE_URL}/web-api/autocomplete"
+
+# Windy.com — public endpoints, no API key required.
+WINDY_NODE_URL = "https://node.windy.com"
+WINDY_STORMS_URL = f"{WINDY_NODE_URL}/tc/v2/storms"
+WINDY_ALERTS_URL = WINDY_NODE_URL + "/capalerts/{lat}/{lon}?source=hp&lang=vi&maxCount=6"
+WINDY_IMAGE_URL = WINDY_NODE_URL + "/widget/{kind}/{style}/image"
+# Interactive map, embeddable in a Home Assistant iframe card (the main
+# windy.com site sets frame-ancestors and cannot be embedded).
+WINDY_EMBED_URL = "https://embed.windy.com/embed2.html"
+
+# A storm further away than this is listed but not tracked in detail.
+STORM_NEARBY_RADIUS_KM = 2500
+
+# How many individual storm sensors to create. The northwest Pacific rarely has
+# more than three named systems at once; a fixed set of slots keeps the entity
+# ids stable as storms come and go, and the count sensor always lists them all.
+STORM_SLOTS = 3
+
+# Track points kept in entity attributes. History can run to ~56 points per
+# storm and attributes are written to the state machine on every update.
+STORM_TRACK_POINTS = 12
+
+# A forecast track point this close to the coast counts as reaching land.
+LANDFALL_THRESHOLD_KM = 80
+
+# Coastal reference points, roughly on the shoreline of each coastal province,
+# used to name where a storm is heading. Ordered north to south.
+VIETNAM_COAST: tuple[tuple[str, float, float], ...] = (
+    ("Quảng Ninh", 21.05, 107.35),
+    ("Hải Phòng", 20.75, 106.75),
+    ("Thái Bình", 20.45, 106.55),
+    ("Nam Định", 20.15, 106.35),
+    ("Ninh Bình", 20.05, 106.10),
+    ("Thanh Hóa", 19.70, 105.95),
+    ("Nghệ An", 18.80, 105.80),
+    ("Hà Tĩnh", 18.30, 106.05),
+    ("Quảng Bình", 17.50, 106.65),
+    ("Quảng Trị", 16.85, 107.15),
+    ("Huế", 16.50, 107.65),
+    ("Đà Nẵng", 16.05, 108.25),
+    ("Quảng Nam", 15.60, 108.55),
+    ("Quảng Ngãi", 15.10, 108.90),
+    ("Bình Định", 14.00, 109.25),
+    ("Phú Yên", 13.15, 109.30),
+    ("Khánh Hòa", 12.25, 109.20),
+    ("Ninh Thuận", 11.60, 109.00),
+    ("Bình Thuận", 10.90, 108.10),
+    ("Bà Rịa - Vũng Tàu", 10.35, 107.10),
+    ("TP. Hồ Chí Minh", 10.40, 106.90),
+    ("Tiền Giang", 10.30, 106.70),
+    ("Bến Tre", 9.90, 106.60),
+    ("Trà Vinh", 9.70, 106.50),
+    ("Sóc Trăng", 9.40, 106.10),
+    ("Bạc Liêu", 9.10, 105.70),
+    ("Cà Mau", 8.70, 105.10),
+    ("Kiên Giang", 10.00, 104.80),
+)
+
+# Forecast models in the order they are trusted for a landfall estimate: JMA is
+# the WMO-designated centre for this basin, then ECMWF, then the rest.
+LANDFALL_MODEL_PRIORITY: tuple[str, ...] = (
+    "jma", "ecmwf", "ukm", "noaa-at", "imd", "detected(ecmwf-hres)", "detected(gfs)",
+)
+
+# Default size of the Windy satellite/radar images.
+WINDY_IMAGE_WIDTH = 800
+WINDY_IMAGE_HEIGHT = 600
+
+# Vietnamese compass points -> (English cardinal, degrees).
+# B=Bắc(N), N=Nam(S), Đ=Đông(E), T=Tây(W) — "N" means SOUTH in Vietnamese, so
+# it must never be handed to Home Assistant unconverted.
+WIND_DIRECTION_VI: dict[str, tuple[str, float]] = {
+    "B": ("N", 0.0),
+    "BĐB": ("NNE", 22.5),
+    "ĐB": ("NE", 45.0),
+    "ĐĐB": ("ENE", 67.5),
+    "Đ": ("E", 90.0),
+    "ĐĐN": ("ESE", 112.5),
+    "ĐN": ("SE", 135.0),
+    "NĐN": ("SSE", 157.5),
+    "N": ("S", 180.0),
+    "NTN": ("SSW", 202.5),
+    "TN": ("SW", 225.0),
+    "TTN": ("WSW", 247.5),
+    "T": ("W", 270.0),
+    "TTB": ("WNW", 292.5),
+    "TB": ("NW", 315.0),
+    "BTB": ("NNW", 337.5),
+}
+
+# English cardinals -> full Vietnamese names, for describing which way a storm
+# is heading in plain words.
+CARDINAL_VI: dict[str, str] = {
+    "N": "Bắc",
+    "NNE": "Bắc Đông Bắc",
+    "NE": "Đông Bắc",
+    "ENE": "Đông Đông Bắc",
+    "E": "Đông",
+    "ESE": "Đông Đông Nam",
+    "SE": "Đông Nam",
+    "SSE": "Nam Đông Nam",
+    "S": "Nam",
+    "SSW": "Nam Tây Nam",
+    "SW": "Tây Nam",
+    "WSW": "Tây Tây Nam",
+    "W": "Tây",
+    "WNW": "Tây Tây Bắc",
+    "NW": "Tây Bắc",
+    "NNW": "Bắc Tây Bắc",
+}
+
+# English cardinals -> degrees, in case a page is served in English.
+WIND_DIRECTION_EN: dict[str, float] = {
+    "N": 0.0, "NNE": 22.5, "NE": 45.0, "ENE": 67.5,
+    "E": 90.0, "ESE": 112.5, "SE": 135.0, "SSE": 157.5,
+    "S": 180.0, "SSW": 202.5, "SW": 225.0, "WSW": 247.5,
+    "W": 270.0, "WNW": 292.5, "NW": 315.0, "NNW": 337.5,
+}
 
 # Weather conditions mapping to Home Assistant
 CONDITION_MAP = {
