@@ -32,6 +32,10 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 - Dữ liệu bão được **chia sẻ giữa mọi địa điểm**: thêm vị trí thứ hai hay thứ mười cũng không phát sinh thêm request tới Windy.
 - Tự phục hồi khi cookie hết hiệu lực: gặp HTTP 403 thì xoá cookie và bắt tay lại ngay trong lượt đó, không phải chờ khởi động lại Home Assistant.
 
+## Yêu cầu
+
+**Home Assistant 2024.11 trở lên.** Tích hợp khởi tạo coordinator với tham số `config_entry`, tham số này chỉ có từ 2024.11; trên bản cũ hơn tích hợp sẽ báo lỗi khi khởi động.
+
 ## Cài đặt
 
 ### Cài đặt qua HACS (khuyến nghị)
