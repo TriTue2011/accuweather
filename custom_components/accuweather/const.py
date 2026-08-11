@@ -5,7 +5,7 @@ DOMAIN = "accuweather"
 # Shown on the device page. Keep VERSION in step with manifest.json — the device
 # page used to advertise 2026.4.22 while the manifest had moved on.
 MANUFACTURER = "TriTue2011"
-VERSION = "2026.8.12"
+VERSION = "2026.8.13"
 
 # Config flow
 CONF_LOCATION_KEY = "location_key"
@@ -73,8 +73,19 @@ LANDFALL_THRESHOLD_KM = 80
 # would read as having hit it.
 LANDFALL_OBSERVED_KM = 45
 
-# Coastal reference points, roughly on the shoreline of each coastal province,
-# used to name where a storm is heading. Ordered north to south.
+# How far back an observed landfall still counts as news. Dolphin had crossed
+# Japan five days before it reached inland China; reporting the Japanese
+# crossing said nothing about where the storm actually was.
+LANDFALL_RECENT_HOURS = 72
+
+# Beyond this there is no land in the tracked basin, so no landfall is guessed.
+# Naming a coast 3000 km away told people nothing except that the answer was
+# forced: a storm off Tokyo was reported against the coast of Quảng Ninh.
+COAST_LOOKUP_MAX_KM = 2000
+
+# Vietnamese coastal reference points, named by province because that is the
+# useful answer here. Everywhere else in the basin comes from coastline.py,
+# named by country. Ordered north to south.
 VIETNAM_COAST: tuple[tuple[str, float, float], ...] = (
     ("Quảng Ninh", 21.05, 107.35),
     ("Hải Phòng", 20.75, 106.75),

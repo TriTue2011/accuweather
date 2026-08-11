@@ -831,14 +831,19 @@ class AccuWeatherStormSensor(
 
     @property
     def native_value(self) -> Any:
-        """Name the storm the way a Vietnamese bulletin would.
+        """Read out the storm the way a Vietnamese bulletin would.
 
-        "Bão mạnh Yagi cấp 12" — intensity wording, name, then the Beaufort
-        force, which is the number people actually act on.
+        Intensity wording, name, Beaufort force, how far away and which way it
+        is going — the figures worth seeing without opening the attributes.
         """
         storm = self._storm
         if not storm:
             return NO_STORM
+        if summary := storm.get("summary_text"):
+            return summary
+
+        # Storms outside the detailed set have no track, so only the headline
+        # from the storm list is available for them.
         name = storm.get("name") or "?"
         classification = storm.get("classification")
         beaufort = storm.get("beaufort")

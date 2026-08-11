@@ -22,10 +22,13 @@ from typing import Any
 import aiohttp
 from homeassistant.util import dt as dt_util
 
+from .coastline import COASTAL_POINTS
 from .const import (
     CARDINAL_VI,
+    COAST_LOOKUP_MAX_KM,
     LANDFALL_MODEL_PRIORITY,
     LANDFALL_OBSERVED_KM,
+    LANDFALL_RECENT_HOURS,
     LANDFALL_THRESHOLD_KM,
     STORM_NEARBY_RADIUS_KM,
     STORM_SLOTS,
@@ -170,16 +173,62 @@ def _movement_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
     return movement
 
 
-def nearest_coast(latitude: float, longitude: float) -> tuple[str, float]:
-    """Return the closest Vietnamese coastal province and its distance in km."""
-    name, best = min(
-        (
-            (province, distance_km(latitude, longitude, lat, lon))
-            for province, lat, lon in VIETNAM_COAST
-        ),
-        key=lambda item: item[1],
-    )
-    return name, best
+# Coastal points bucketed into whole cells of this many degrees. Scanning all
+# 2716 of them for every track point — around 90 points per storm — took long
+# enough to be felt inside the event loop; this cuts each lookup to a few dozen.
+_GRID_DEGREES = 5
+_COAST_GRID: dict[tuple[int, int], list[tuple[str, float, float]]] = {}
+
+
+def _coast_grid() -> dict[tuple[int, int], list[tuple[str, float, float]]]:
+    """Coastal points indexed by grid cell, built once on first use."""
+    if not _COAST_GRID:
+        for name, lat, lon in (*VIETNAM_COAST, *COASTAL_POINTS):
+            cell = (int(lat // _GRID_DEGREES), int(lon // _GRID_DEGREES))
+            _COAST_GRID.setdefault(cell, []).append((name, lat, lon))
+    return _COAST_GRID
+
+
+def nearest_coast(
+    latitude: float, longitude: float
+) -> tuple[str | None, float | None]:
+    """Nearest named piece of land and its distance in km.
+
+    Vietnamese landfalls are named by province, everywhere else by country. Land
+    further than COAST_LOOKUP_MAX_KM away is reported as no land at all: the
+    honest answer for a storm sitting in the middle of an ocean.
+    """
+    grid = _coast_grid()
+    home_lat = int(latitude // _GRID_DEGREES)
+    home_lon = int(longitude // _GRID_DEGREES)
+
+    for radius in (1, 2, 4):
+        window = [
+            point
+            for d_lat in range(-radius, radius + 1)
+            for d_lon in range(-radius, radius + 1)
+            for point in grid.get((home_lat + d_lat, home_lon + d_lon), ())
+        ]
+        if not window:
+            continue
+        # One pass, keeping the running best: min() with a key would measure
+        # every point twice over, and this runs for every track point of every
+        # storm on every update.
+        name, best = None, None
+        for candidate, lat, lon in window:
+            measured = distance_km(latitude, longitude, lat, lon)
+            if best is None or measured < best:
+                name, best = candidate, measured
+        # The window reaches at least `radius` whole cells in every direction,
+        # so anything nearer than that span would have been inside it. Below
+        # that bound the answer is certainly the nearest; above it, widen.
+        certain_km = radius * _GRID_DEGREES * 111.0 * math.cos(math.radians(latitude))
+        if best <= certain_km or radius == 4:
+            if best > COAST_LOOKUP_MAX_KM:
+                return None, None
+            return name, best
+
+    return None, None
 
 
 def _coast_crossing(
@@ -191,7 +240,7 @@ def _coast_crossing(
         if lat is None or lon is None:
             continue
         province, distance = nearest_coast(lat, lon)
-        if distance <= threshold_km:
+        if distance is not None and distance <= threshold_km:
             return {
                 "province": province,
                 "distance_km": distance,
@@ -223,14 +272,25 @@ def predict_landfall(
     Failing that, forecast tracks are checked in agency-trust order and the
     first point reaching the coast is reported.
 
-    Either way this is an approximation from track points and coastal reference
-    points: it names the stretch of coast involved, not an official bulletin.
+    The coast in question is whichever land is nearest — Vietnam by province,
+    everywhere else in the basin by country. Either way this is an
+    approximation from track points and coastal reference points: it names the
+    stretch of coast involved, not an official bulletin.
     """
     if history:
-        # Sorted forward — the feed sends history newest first, and the crossing
-        # that matters is the first one, not the most recent point near shore.
-        observed = sorted(history, key=lambda p: p.get("time") or "")
-        if hit := _coast_crossing(observed, LANDFALL_OBSERVED_KM):
+        # Newest point first, so this finds the LAST time the storm was against
+        # a coast rather than the first. A long-lived storm crosses more than
+        # one country, and only the most recent crossing describes where it is.
+        observed = sorted(
+            history, key=lambda p: p.get("time") or "", reverse=True
+        )
+        hit = _coast_crossing(observed, LANDFALL_OBSERVED_KM)
+        # An old crossing is history, not weather. Past that age the storm has
+        # moved on and its forecast track is the thing worth reporting.
+        if hit and (hours := hours_until(hit.get("time"))) is not None:
+            if hours < -LANDFALL_RECENT_HOURS:
+                hit = None
+        if hit:
             hit["model"] = "observed"
             hit["status"] = "past"
             return hit
@@ -239,7 +299,15 @@ def predict_landfall(
     ordered += [m for m in sorted(forecasts) if m not in ordered]
 
     for model in ordered:
-        if hit := _coast_crossing(forecasts[model].get("track") or [], threshold_km):
+        # A forecast run starts at its reference time, which is already hours
+        # old by the time it is published. Its opening points would otherwise
+        # produce "dự kiến đổ bộ" at a moment that has been and gone.
+        track = [
+            point
+            for point in (forecasts[model].get("track") or [])
+            if (hours := hours_until(point.get("time"))) is None or hours > 0
+        ]
+        if hit := _coast_crossing(track, threshold_km):
             hit["model"] = model
             hit["status"] = "forecast"
             return hit
@@ -259,6 +327,48 @@ def local_time_text(raw: str | None) -> str | None:
     except (TypeError, ValueError):
         return str(raw)
     return dt_util.as_local(stamp).strftime("%H:%M %d/%m")
+
+
+def describe_storm(storm: dict[str, Any]) -> str:
+    """One bulletin line for a single storm: what, where, which way, going in.
+
+    The state of a storm sensor used to be the name alone, which left the
+    interesting figures buried in attributes the dashboard does not show. The
+    landfall clause here is deliberately the short form — the full sentence,
+    with distances and forecast model, stays in the `landfall` attribute, and
+    the state has a 255 character ceiling to respect.
+    """
+    name = storm.get("name") or "?"
+    classification = storm.get("classification")
+    parts = [f"{classification} {name}" if classification else name]
+    if beaufort := storm.get("beaufort"):
+        parts[0] += f" cấp {beaufort}"
+
+    distance = storm.get("distance_km")
+    direction = storm.get("direction_from_home")
+    if distance is not None and direction:
+        parts.append(f"cách {round(distance)} km về phía {direction}")
+    elif distance is not None:
+        parts.append(f"cách {round(distance)} km")
+
+    if movement := storm.get("movement_text"):
+        parts.append(movement[0].lower() + movement[1:])
+
+    line = ", ".join(parts)
+
+    landfall = storm.get("landfall") or {}
+    if province := landfall.get("province"):
+        when = landfall.get("time_text") or local_time_text(landfall.get("time"))
+        if landfall.get("status") == "past":
+            line += f" — đã vào {province}"
+        else:
+            line += f" — dự kiến vào {province}"
+        if when:
+            line += f" lúc {when}"
+
+    # Home Assistant rejects a state longer than 255 characters, which would
+    # take the whole sensor down rather than just truncate the text.
+    return line[:255]
 
 
 def hours_until(raw: str | None) -> float | None:
@@ -297,14 +407,17 @@ def describe_landfall(
                 f"Chưa có dấu hiệu vào đất liền; gần bờ {heading_towards} nhất "
                 f"khoảng {round(distance_to_coast)} km"
             )
-        return "Chưa có dấu hiệu vào đất liền Việt Nam"
+        # No land within COAST_LOOKUP_MAX_KM: the storm is out in open ocean.
+        return "Đang ở ngoài khơi, chưa có đất liền nào trong tầm"
 
     when = local_time_text(landfall.get("time"))
     force = landfall.get("beaufort")
     home = landfall.get("distance_from_home_km") if from_home else None
 
     if landfall.get("status") == "past":
-        parts = [f"Đã vào khu vực {landfall['province']}"]
+        # "khu vực" is dropped: the name can now be a country as easily as a
+        # Vietnamese province, and "đã vào khu vực Nhật Bản" reads oddly.
+        parts = [f"Đã vào {landfall['province']}"]
         if when:
             parts[0] += f" lúc {when}"
         if home is not None:
@@ -313,7 +426,7 @@ def describe_landfall(
             parts.append(f"cấp {force} khi vào bờ")
         return ", ".join(parts)
 
-    parts = [f"Dự kiến vào khu vực {landfall['province']}"]
+    parts = [f"Dự kiến vào {landfall['province']}"]
     if when:
         parts[0] += f" khoảng {when}"
     remaining = landfall.get("distance_from_storm_km")
@@ -507,6 +620,31 @@ async def get_storms(
     }
 
 
+def _central_pressure(
+    history: list[dict[str, Any]], forecasts: dict[str, dict[str, Any]]
+) -> float | None:
+    """Central pressure of the storm, in hPa.
+
+    Windy's observed track usually carries no pressure at all — Chan Hom had it
+    on none of its 19 points — while the forecast records almost always do. So
+    the current observation is used when it has one, and otherwise the earliest
+    point of the most trusted forecast, which is the model's analysis of roughly
+    now. Older history points are deliberately not searched: the one pressure
+    reading Dolphin had was two weeks stale and would have been worse than
+    nothing.
+    """
+    if history and history[0].get("pressure_hpa") is not None:
+        return history[0]["pressure_hpa"]
+
+    ordered = [m for m in LANDFALL_MODEL_PRIORITY if m in forecasts]
+    ordered += [m for m in sorted(forecasts) if m not in ordered]
+    for model in ordered:
+        for record in forecasts[model].get("track") or []:
+            if record.get("pressure_hpa") is not None:
+                return record["pressure_hpa"]
+    return None
+
+
 async def _add_storm_detail(
     session: aiohttp.ClientSession,
     storm: dict[str, Any],
@@ -553,7 +691,7 @@ async def _add_storm_detail(
     storm["forecast"] = forecasts
     storm.update(_movement_from_history(history))
     if history:
-        storm["pressure_hpa"] = history[0].get("pressure_hpa")
+        storm["pressure_hpa"] = _central_pressure(history, forecasts)
         # ISO (UTC, as the feed sends it) for templates, plus a local-time
         # rendering for anyone reading the attribute directly.
         storm["observed_at"] = history[0].get("time")
@@ -608,6 +746,8 @@ async def _add_storm_detail(
         storm.get("distance_to_coast_km"),
         from_home=True,
     )
+    # Built last: it quotes the landfall estimate worked out just above.
+    storm["summary_text"] = describe_storm(storm)
 
 
 async def get_alerts(
