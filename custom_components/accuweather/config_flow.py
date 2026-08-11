@@ -22,6 +22,7 @@ from .const import (
     MIN_UPDATE_INTERVAL,
     MAX_UPDATE_INTERVAL
 )
+from .fetcher import HtmlFetcher
 from .utils import get_location_keys
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,11 +53,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         if user_input is not None:
             try:
-                session = async_get_clientsession(self.hass)
+                # Same browser-fingerprint transport the coordinator uses, so
+                # searching works on networks where plain requests are blocked.
+                fetcher = HtmlFetcher(async_get_clientsession(self.hass))
                 location_query = user_input["location"]
-                
-                # Get location keys from AccuWeather
-                self._locations = await get_location_keys(session, location_query)
+
+                try:
+                    self._locations = await get_location_keys(
+                        fetcher, location_query
+                    )
+                finally:
+                    await fetcher.close()
                 
                 if not self._locations:
                     errors["base"] = "no_locations"

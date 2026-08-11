@@ -8,9 +8,9 @@ import re
 import unicodedata
 from typing import Any
 
-import aiohttp
 from bs4 import BeautifulSoup
 
+from .fetcher import HtmlFetcher
 from .const import (
     AUTOCOMPLETE_URL,
     BASE_URL,
@@ -193,7 +193,7 @@ class BlockedError(Exception):
 
 
 async def _fetch_with_retry(
-    session: aiohttp.ClientSession,
+    fetcher: HtmlFetcher,
     url: str,
     headers: dict[str, str],
 ) -> str | None:
@@ -207,49 +207,40 @@ async def _fetch_with_retry(
     blocked_attempts = 0
     for attempt in range(1, RETRY_COUNT + 1):
         try:
-            client_timeout = aiohttp.ClientTimeout(
-                total=None,
-                connect=CONNECT_TIMEOUT,
-                sock_read=READ_TIMEOUT,
-                sock_connect=CONNECT_TIMEOUT,
-            )
-            async with session.get(
-                url, headers=headers, timeout=client_timeout
-            ) as response:
-                if response.status == 200:
-                    return await response.text()
-                if response.status in BLOCKED_HTTP_ERRORS:
-                    blocked_attempts += 1
-                    if blocked_attempts >= BLOCKED_RETRY_COUNT:
-                        raise BlockedError(response.status, url)
-                    # Drop the cookies before retrying. A stale Akamai clearance
-                    # cookie is one of the ways a working setup starts returning
-                    # 403 out of nowhere; starting a fresh handshake recovers it
-                    # without waiting for Home Assistant to be restarted.
-                    session.cookie_jar.clear()
-                    delay = INITIAL_RETRY_DELAY * (2 ** (blocked_attempts - 1))
-                    _LOGGER.debug(
-                        "HTTP %d (bot protection) for %s (attempt %d/%d), cleared "
-                        "cookies, retrying in %.1fs...",
-                        response.status, url, blocked_attempts,
-                        BLOCKED_RETRY_COUNT, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                if response.status in RETRY_HTTP_ERRORS:
-                    delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
-                    _LOGGER.debug(
-                        "HTTP %d for %s (attempt %d/%d), retrying in %.1fs...",
-                        response.status, url, attempt, RETRY_COUNT, delay,
-                    )
-                    if attempt < RETRY_COUNT:
-                        await asyncio.sleep(delay)
-                    continue
+            status, body = await fetcher.get_text(url, headers)
+            if status == 200 and body is not None:
+                return body
+            if status in BLOCKED_HTTP_ERRORS:
+                blocked_attempts += 1
+                if blocked_attempts >= BLOCKED_RETRY_COUNT:
+                    raise BlockedError(status, url)
+                # Drop the cookies before retrying. A stale Akamai clearance
+                # cookie is one of the ways a working setup starts returning
+                # 403 out of nowhere; starting a fresh handshake recovers it
+                # without waiting for Home Assistant to be restarted.
+                fetcher.clear_cookies()
+                delay = INITIAL_RETRY_DELAY * (2 ** (blocked_attempts - 1))
                 _LOGGER.debug(
-                    "HTTP %d for %s (attempt %d/%d), not retrying",
-                    response.status, url, attempt, RETRY_COUNT,
+                    "HTTP %d (bot protection) for %s (attempt %d/%d), cleared "
+                    "cookies, retrying in %.1fs...",
+                    status, url, blocked_attempts, BLOCKED_RETRY_COUNT, delay,
                 )
-                return None
+                await asyncio.sleep(delay)
+                continue
+            if status in RETRY_HTTP_ERRORS:
+                delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+                _LOGGER.debug(
+                    "HTTP %d for %s (attempt %d/%d), retrying in %.1fs...",
+                    status, url, attempt, RETRY_COUNT, delay,
+                )
+                if attempt < RETRY_COUNT:
+                    await asyncio.sleep(delay)
+                continue
+            _LOGGER.debug(
+                "HTTP %d for %s (attempt %d/%d), not retrying",
+                status, url, attempt, RETRY_COUNT,
+            )
+            return None
         except BlockedError:
             raise
         except asyncio.TimeoutError:
@@ -257,14 +248,6 @@ async def _fetch_with_retry(
             _LOGGER.debug(
                 "Timeout for %s (attempt %d/%d), retrying in %.1fs...",
                 url, attempt, RETRY_COUNT, delay,
-            )
-            if attempt < RETRY_COUNT:
-                await asyncio.sleep(delay)
-        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError) as e:
-            delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
-            _LOGGER.debug(
-                "%s for %s (attempt %d/%d): %s, retrying in %.1fs...",
-                type(e).__name__, url, attempt, RETRY_COUNT, e, delay,
             )
             if attempt < RETRY_COUNT:
                 await asyncio.sleep(delay)
@@ -280,7 +263,7 @@ async def _fetch_with_retry(
     return None
 
 
-async def get_location_keys(session: aiohttp.ClientSession, query: str) -> list[tuple[str, str, str]]:
+async def get_location_keys(fetcher: HtmlFetcher, query: str) -> list[tuple[str, str, str]]:
     """Get location keys from AccuWeather."""
     params = {
         "query": query,
@@ -290,18 +273,16 @@ async def get_location_keys(session: aiohttp.ClientSession, query: str) -> list[
     headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
     
     try:
-        async with session.get(AUTOCOMPLETE_URL, params=params, headers=headers) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data and isinstance(data, list):
-                    results = []
-                    for item in data:
-                        key = item.get("key")
-                        name = item.get("localizedName") 
-                        long_name = item.get("longName")
-                        if key and name:
-                            results.append((key, name, long_name))
-                    return results
+        data = await fetcher.get_json(AUTOCOMPLETE_URL, headers, params=params)
+        if data and isinstance(data, list):
+            results = []
+            for item in data:
+                key = item.get("key")
+                name = item.get("localizedName")
+                long_name = item.get("longName")
+                if key and name:
+                    results.append((key, name, long_name))
+            return results
     except Exception as e:
         _LOGGER.debug("get_location_keys: %s: %s", type(e).__name__, e)
     
@@ -616,12 +597,12 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
         return None
 
 
-async def get_current_weather(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any] | None:
+async def get_current_weather(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any] | None:
     """Get current weather data (converted from get_weather.py)."""
     url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/current-weather/{location_key}"
     headers = get_headers()
 
-    html = await _fetch_with_retry(session, url, headers)
+    html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return None
 
@@ -755,12 +736,12 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
         return []
 
 
-async def get_daily_forecast(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> list[dict[str, Any]]:
+async def get_daily_forecast(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> list[dict[str, Any]]:
     """Get daily forecast data (converted from get_daily.py)."""
     url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/daily-weather-forecast/{location_key}"
     headers = get_headers()
 
-    html = await _fetch_with_retry(session, url, headers)
+    html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return []
 
@@ -877,7 +858,7 @@ async def parse_hourly_html(html: str, day_offset: int = 0) -> list[dict[str, An
 
 
 async def get_hourly_forecast(
-    session: aiohttp.ClientSession,
+    fetcher: HtmlFetcher,
     location_key: str,
     location_slug: str,
     days: int = HOURLY_DAYS,
@@ -898,7 +879,7 @@ async def get_hourly_forecast(
             # Same pacing as the coordinator uses between pages.
             await asyncio.sleep(0.5)
 
-        html = await _fetch_with_retry(session, url, headers)
+        html = await _fetch_with_retry(fetcher, url, headers)
         if html is None:
             continue
 
@@ -1044,12 +1025,12 @@ async def parse_air_html(html: str) -> dict[str, Any]:
         return dict(EMPTY_AIR_QUALITY)
 
 
-async def get_air_quality(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any]:
+async def get_air_quality(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any]:
     """Get air quality data (converted from get_air.py)."""
     url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/air-quality-index/{location_key}"
     headers = get_headers()
 
-    html = await _fetch_with_retry(session, url, headers)
+    html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return dict(EMPTY_AIR_QUALITY)
 
@@ -1127,7 +1108,7 @@ async def parse_health_html(html: str, group_slug: str = '') -> list[dict[str, A
         return []
 
 
-async def crawl_all_health_activities(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, list[dict[str, Any]]]:
+async def crawl_all_health_activities(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, list[dict[str, Any]]]:
     """Crawl all health activities by category (converted from get_all_health.py).
 
     AccuWeather redesigned the site - all activities are listed on the main
@@ -1168,7 +1149,7 @@ async def crawl_all_health_activities(session: aiohttp.ClientSession, location_k
     # Chỉ crawl trang health-activities chính, KHÔNG crawl subpages (404)
     try:
         main_url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/health-activities/{location_key}"
-        html = await _fetch_with_retry(session, main_url, headers)
+        html = await _fetch_with_retry(fetcher, main_url, headers)
         if html:
             activities = await parse_health_html(html, 'health')
 
@@ -1190,12 +1171,12 @@ async def crawl_all_health_activities(session: aiohttp.ClientSession, location_k
     return groups
 
 
-async def get_minutecast_data(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any] | None:
+async def get_minutecast_data(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any] | None:
     """Get MinuteCast data (minute-by-minute precipitation forecast)."""
     url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/minute-weather-forecast/{location_key}"
     headers = get_headers()
 
-    html = await _fetch_with_retry(session, url, headers)
+    html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return None
 

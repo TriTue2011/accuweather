@@ -42,6 +42,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, session, location_key, location_name, entry, update_interval
     )
 
+    if coordinator.fetcher.using_impersonation:
+        _LOGGER.debug("Using a browser TLS fingerprint for AccuWeather requests")
+    else:
+        _LOGGER.warning(
+            "curl_cffi is not available, so AccuWeather requests will not carry a "
+            "browser TLS fingerprint. Expect HTTP 403 on datacenter or VPN "
+            "addresses; installing the curl_cffi requirement fixes it"
+        )
+
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})
@@ -55,9 +64,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        # The session is detached automatically when the entry unloads; closing
-        # it here would only trip Home Assistant's "integration closes the HA
-        # session" warning.
-        hass.data[DOMAIN].pop(entry.entry_id)
+        # The aiohttp session is detached automatically when the entry unloads;
+        # closing it here would only trip Home Assistant's "integration closes
+        # the HA session" warning. The impersonated session is ours to close.
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.fetcher.close()
 
     return unload_ok

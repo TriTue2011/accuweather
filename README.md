@@ -140,7 +140,13 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
 - **Không có cách nào để website tự đẩy thay đổi về Home Assistant.** AccuWeather chỉ là trang web (không có webhook/websocket), Windy cũng chỉ có endpoint HTTP với cache 60 giây — nên buộc phải hỏi lại theo chu kỳ. Cách gần nhất với „thay đổi là thấy" là chu kỳ ngắn nhưng chỉ tải phần hay đổi, và đó là cách tích hợp này đang làm (xem mục Tính năng). Nếu cần cập nhật ngay lập tức, gọi dịch vụ `homeassistant.update_entity` trên entity thời tiết trong tự động hoá của bạn.
 - Dữ liệu cập nhật theo thời gian đã cấu hình (mặc định 5 phút, tối thiểu 3 phút). Đặt quá ngắn vẫn tăng nguy cơ bị chặn vì mỗi lượt vẫn có 2 trang, và mỗi 4 lượt có 8 trang.
-- **Nếu tất cả entity thành „unavailable"**: xem log Home Assistant. Khi thấy thông báo „AccuWeather từ chối yêu cầu (HTTP 403)" thì mạng của bạn đang bị hệ thống chống bot của AccuWeather chặn — không phải lỗi cấu hình. Thử đổi mạng/DNS hoặc tăng thời gian cập nhật. Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
+- **Về lỗi HTTP 403 và VPN.** AccuWeather đứng sau Akamai Bot Manager: hệ thống này đánh giá client theo *dấu vết TLS* chứ không chỉ User-Agent, cộng thêm điểm rủi ro của địa chỉ IP. Hệ quả thực tế là chạy từ IP nhà mạng Việt Nam thì thường không sao, nhưng bật VPN — nhất là VPN đặt ở trung tâm dữ liệu như Hong Kong hay Singapore — là bị chặn ngay dù không đổi gì trong cấu hình.
+
+  Tích hợp xử lý bằng thư viện [`curl_cffi`](https://pypi.org/project/curl_cffi/), nó bắt tay TLS giống Chrome thật nên vượt được. Thư viện đã nằm trong `requirements` của manifest, Home Assistant tự cài lúc khởi động. Đã kiểm chứng trên một IP trung tâm dữ liệu đang bị chặn: cách cũ trả 403, cách này trả về đủ dữ liệu.
+
+  **Không cần thêm địa chỉ hay domain nào vào cấu hình VPN.** Loại AccuWeather khỏi VPN gần như không làm được, vì Akamai dùng hàng nghìn IP anycast thay đổi liên tục.
+
+  Nếu vẫn gặp 403, đọc thông báo trong log — nó phân biệt hai trường hợp: đã dùng dấu vết trình duyệt mà vẫn bị chặn (hãy đổi máy chủ VPN hoặc tắt VPN cho Home Assistant), hoặc `curl_cffi` chưa cài được (tìm lỗi cài đặt trong log lúc khởi động). Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
 - Dữ liệu bão lấy từ endpoint công khai của Windy, gộp sẵn JMA, NOAA NHC, UKMO, BoM, IMD cùng các mô hình tự dò trên ECMWF/GFS/ICON. Endpoint này không có tài liệu chính thức nên có thể thay đổi; khi đó các sensor bão sẽ trống chứ không làm hỏng phần thời tiết.
 - **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.
 - Độ chính xác của dữ liệu thời tiết phụ thuộc AccuWeather; một số khu vực không có đủ dữ liệu chi tiết (ví dụ nơi không có chỉ số phấn hoa hoặc MinuteCast).

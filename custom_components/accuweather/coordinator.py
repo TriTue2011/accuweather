@@ -21,6 +21,7 @@ from .utils import (
     is_night_at, night_variant, parse_clock_minutes,
     slugify,
 )
+from .fetcher import HtmlFetcher
 from .windy import EMPTY_STORMS, get_alerts, get_storms
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         self.location_name = location_name
         self.location_slug = slugify(location_name)
         self.session = session
+        # AccuWeather needs a browser TLS fingerprint to get past its bot
+        # protection; Windy is happy with the plain Home Assistant session.
+        self.fetcher = HtmlFetcher(session)
         # Filled in from the page's own currentLocation object; falls back to the
         # Home Assistant location so storm tracking still works if it is missing.
         self.latitude: float | None = hass.config.latitude
@@ -96,7 +100,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             # Sending many concurrent requests is a strong bot signal.
             await asyncio.sleep(0.5)
 
-            current_weather = await get_current_weather(self.session, self.location_key, self.location_slug)
+            current_weather = await get_current_weather(self.fetcher, self.location_key, self.location_slug)
             if isinstance(current_weather, Exception):
                 _LOGGER.debug(
                     "Exception getting current weather: %s: %s",
@@ -125,7 +129,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             if refresh_slow:
                 await asyncio.sleep(0.5)
 
-                daily_forecast = await get_daily_forecast(self.session, self.location_key, self.location_slug)
+                daily_forecast = await get_daily_forecast(self.fetcher, self.location_key, self.location_slug)
                 if isinstance(daily_forecast, Exception):
                     _LOGGER.debug(
                         "Exception getting daily forecast: %s: %s",
@@ -136,7 +140,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                hourly_forecast = await get_hourly_forecast(self.session, self.location_key, self.location_slug)
+                hourly_forecast = await get_hourly_forecast(self.fetcher, self.location_key, self.location_slug)
                 if isinstance(hourly_forecast, Exception):
                     _LOGGER.debug(
                         "Exception getting hourly forecast: %s: %s",
@@ -147,7 +151,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                air_quality = await get_air_quality(self.session, self.location_key, self.location_slug)
+                air_quality = await get_air_quality(self.fetcher, self.location_key, self.location_slug)
                 if isinstance(air_quality, Exception):
                     _LOGGER.debug(
                         "Exception getting air quality: %s: %s",
@@ -158,7 +162,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                health_activities = await crawl_all_health_activities(self.session, self.location_key, self.location_slug)
+                health_activities = await crawl_all_health_activities(self.fetcher, self.location_key, self.location_slug)
                 if isinstance(health_activities, Exception):
                     _LOGGER.debug(
                         "Exception getting health activities: %s: %s",
@@ -184,7 +188,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
             await asyncio.sleep(0.5)
 
-            minutecast = await get_minutecast_data(self.session, self.location_key, self.location_slug)
+            minutecast = await get_minutecast_data(self.fetcher, self.location_key, self.location_slug)
             if isinstance(minutecast, Exception):
                 _LOGGER.debug(
                     "Exception getting MinuteCast: %s: %s",
@@ -258,13 +262,25 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             }
 
         except BlockedError as err:
-            # Akamai refused the request. Say so plainly: this is a very
-            # different problem from a layout change, and the log is the only
-            # place the user can find out which one they have.
+            # Akamai refused the request. Say so plainly, and say which of the
+            # two remedies applies: without curl_cffi the requests do not look
+            # like a browser at all, which is what gets blocked first on
+            # datacenter and VPN addresses.
+            if self.fetcher.using_impersonation:
+                hint = (
+                    "Đã dùng dấu vết trình duyệt mà vẫn bị chặn — địa chỉ IP này "
+                    "có thể bị đánh dấu. Thử đổi máy chủ VPN, hoặc tắt VPN cho "
+                    "Home Assistant, hoặc tăng thời gian cập nhật."
+                )
+            else:
+                hint = (
+                    "Thư viện curl_cffi chưa cài được nên yêu cầu không mang dấu "
+                    "vết trình duyệt; đây là nguyên nhân phổ biến nhất khi chạy "
+                    "qua VPN. Xem log lúc khởi động để biết vì sao cài thất bại."
+                )
             raise UpdateFailed(
                 f"AccuWeather từ chối yêu cầu (HTTP {err.status}) — trang web đang "
-                "chặn truy cập tự động từ địa chỉ IP này. Dữ liệu sẽ trở lại khi "
-                "hết chặn; nếu kéo dài, thử đổi mạng/DNS hoặc tăng thời gian cập nhật."
+                f"chặn truy cập tự động từ địa chỉ IP này. {hint}"
             ) from err
         except UpdateFailed:
             # Re-raise UpdateFailed without wrapping
