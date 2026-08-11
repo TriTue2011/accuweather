@@ -59,12 +59,82 @@
         "title": "Cập nhật Cài đặt AccuWeather",
         "description": "Thay đổi cài đặt cho tích hợp AccuWeather. Bạn có thể điều chỉnh tần suất cập nhật dữ liệu thời tiết.",
         "data": {
-          "update_interval": "Khoảng thời gian cập nhật (giây)"
+          "update_interval": "Khoảng thời gian cập nhật (giây)",
+          "sensor_language": "Ngôn ngữ tên sensor"
         },
         "data_description": {
-          "update_interval": "Thời gian giữa các lần cập nhật dữ liệu (300-3600 giây)"
+          "update_interval": "Thời gian giữa các lần cập nhật dữ liệu (300-3600 giây)",
+          "sensor_language": "Ngôn ngữ hiển thị tên sensor, không phụ thuộc ngôn ngữ giao diện. Entity ID giữ nguyên."
         }
       }
+    }
+  },
+  "selector": {
+    "sensor_language": {
+      "options": {
+        "auto": "Theo Home Assistant",
+        "vi": "Tiếng Việt",
+        "en": "Tiếng Anh"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "realfeel_temperature": { "name": "Nhiệt độ cảm nhận" },
+      "realfeel_shade_temperature": { "name": "Nhiệt độ cảm nhận trong bóng râm" },
+      "humidity": { "name": "Độ ẩm" },
+      "pressure": { "name": "Áp suất" },
+      "wind_speed": { "name": "Tốc độ gió" },
+      "wind_bearing": { "name": "Hướng gió" },
+      "wind_gust": { "name": "Gió giật" },
+      "visibility": { "name": "Tầm nhìn" },
+      "cloud_coverage": { "name": "Lượng mây" },
+      "uv_index": { "name": "Chỉ số UV" },
+      "dew_point": { "name": "Điểm sương" },
+      "pm25": { "name": "PM2.5" },
+      "pm10": { "name": "PM10" },
+      "ozone": { "name": "Ozone" },
+      "nitrogen_dioxide": { "name": "Nitơ điôxít" },
+      "sulfur_dioxide": { "name": "Lưu huỳnh điôxít" },
+      "carbon_monoxide": { "name": "Cacbon monoxit" },
+      "cloud_ceiling": { "name": "Trần mây" },
+      "heat_index": { "name": "Chỉ số nhiệt" },
+      "aqi": { "name": "Chỉ số chất lượng không khí" },
+      "aqi_category": { "name": "Mức chất lượng không khí" },
+      "sunrise": { "name": "Mặt trời mọc" },
+      "sunset": { "name": "Mặt trời lặn" },
+      "moon_phase": { "name": "Pha Mặt Trăng" },
+      "minutecast": { "name": "Mưa theo phút" },
+      "storm_count": { "name": "Số cơn bão" },
+      "storm_nearby_count": { "name": "Số bão ở gần" },
+      "storm_nearest_distance": { "name": "Khoảng cách bão gần nhất" },
+      "storm_nearest_beaufort": { "name": "Cấp bão gần nhất" },
+      "storm_movement": { "name": "Hướng di chuyển bão gần nhất" },
+      "storm_landfall": { "name": "Dự báo đổ bộ bão gần nhất" },
+      "weather_alerts": { "name": "Cảnh báo thời tiết" },
+      "storm_slot": { "name": "Bão {number}" },
+      "health_asthma": { "name": "Hen suyễn" },
+      "health_arthritis": { "name": "Viêm khớp" },
+      "health_migraine": { "name": "Đau nửa đầu" },
+      "health_dust_dander": { "name": "Bụi và lông thú" },
+      "health_common_cold": { "name": "Cảm lạnh" },
+      "health_flu": { "name": "Cúm" },
+      "health_sinus": { "name": "Viêm xoang" },
+      "health_running": { "name": "Chạy bộ" },
+      "health_hiking": { "name": "Đi bộ đường dài" },
+      "health_biking": { "name": "Đạp xe" },
+      "health_golf": { "name": "Gôn" },
+      "health_sun_sand": { "name": "Tắm nắng và biển" },
+      "health_astronomy": { "name": "Thiên văn" },
+      "health_fishing": { "name": "Câu cá" },
+      "health_air_travel": { "name": "Đi máy bay" },
+      "health_driving": { "name": "Lái xe" },
+      "health_lawn_mowing": { "name": "Cắt cỏ" },
+      "health_composting": { "name": "Ủ phân" },
+      "health_mosquito_activity": { "name": "Hoạt động của muỗi" },
+      "health_indoor_pests": { "name": "Côn trùng trong nhà" },
+      "health_outdoor_pests": { "name": "Côn trùng ngoài trời" },
+      "health_outdoor_entertaining": { "name": "Vui chơi ngoài trời" }
     }
   }
 }

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any
 
@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CARDINAL_VI,
     LANDFALL_MODEL_PRIORITY,
+    LANDFALL_OBSERVED_KM,
     LANDFALL_THRESHOLD_KM,
     STORM_NEARBY_RADIUS_KM,
     STORM_SLOTS,
@@ -181,38 +182,67 @@ def nearest_coast(latitude: float, longitude: float) -> tuple[str, float]:
     return name, best
 
 
+def _coast_crossing(
+    track: list[dict[str, Any]], threshold_km: float
+) -> dict[str, Any] | None:
+    """First point of a track that comes within `threshold_km` of the coast."""
+    for point in track:
+        lat, lon = point.get("latitude"), point.get("longitude")
+        if lat is None or lon is None:
+            continue
+        province, distance = nearest_coast(lat, lon)
+        if distance <= threshold_km:
+            return {
+                "province": province,
+                "distance_km": distance,
+                "time": point.get("time"),
+                "latitude": lat,
+                "longitude": lon,
+                "pressure_hpa": point.get("pressure_hpa"),
+                "wind_speed_kmh": point.get("wind_speed_kmh"),
+                "beaufort": beaufort_force(
+                    point["wind_speed_kmh"] / 3.6
+                    if point.get("wind_speed_kmh") is not None
+                    else None
+                ),
+            }
+    return None
+
+
 def predict_landfall(
     forecasts: dict[str, dict[str, Any]],
+    history: list[dict[str, Any]] | None = None,
     threshold_km: float = LANDFALL_THRESHOLD_KM,
 ) -> dict[str, Any] | None:
-    """Estimate where and when a storm's track reaches the Vietnamese coast.
+    """Work out where a storm's track meets the Vietnamese coast, past or future.
 
-    Forecast tracks are checked in agency-trust order, and the first point that
-    comes within `threshold_km` of a coastal province is reported. This is an
-    approximation from track points and coastal reference points — it names the
-    stretch of coast a storm is heading for, not an official landfall bulletin.
+    The observed track is checked first, oldest point first: a storm that has
+    already come ashore must be reported as having done so, not as still
+    approaching — its remaining forecast points sit inland, close to the coastal
+    reference points, and would otherwise read as a landfall still to come.
+    Failing that, forecast tracks are checked in agency-trust order and the
+    first point reaching the coast is reported.
+
+    Either way this is an approximation from track points and coastal reference
+    points: it names the stretch of coast involved, not an official bulletin.
     """
+    if history:
+        # Sorted forward — the feed sends history newest first, and the crossing
+        # that matters is the first one, not the most recent point near shore.
+        observed = sorted(history, key=lambda p: p.get("time") or "")
+        if hit := _coast_crossing(observed, LANDFALL_OBSERVED_KM):
+            hit["model"] = "observed"
+            hit["status"] = "past"
+            return hit
+
     ordered = [m for m in LANDFALL_MODEL_PRIORITY if m in forecasts]
     ordered += [m for m in sorted(forecasts) if m not in ordered]
 
     for model in ordered:
-        track = forecasts[model].get("track") or []
-        for point in track:
-            lat, lon = point.get("latitude"), point.get("longitude")
-            if lat is None or lon is None:
-                continue
-            province, distance = nearest_coast(lat, lon)
-            if distance <= threshold_km:
-                return {
-                    "model": model,
-                    "province": province,
-                    "distance_km": distance,
-                    "time": point.get("time"),
-                    "latitude": lat,
-                    "longitude": lon,
-                    "pressure_hpa": point.get("pressure_hpa"),
-                    "wind_speed_kmh": point.get("wind_speed_kmh"),
-                }
+        if hit := _coast_crossing(forecasts[model].get("track") or [], threshold_km):
+            hit["model"] = model
+            hit["status"] = "forecast"
+            return hit
     return None
 
 
@@ -231,25 +261,73 @@ def local_time_text(raw: str | None) -> str | None:
     return dt_util.as_local(stamp).strftime("%H:%M %d/%m")
 
 
+def hours_until(raw: str | None) -> float | None:
+    """Hours from now until a Windy timestamp; negative once it has passed."""
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        # The feed stamps everything in UTC without saying so.
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return round((stamp - dt_util.utcnow()).total_seconds() / 3600, 1)
+
+
 def describe_landfall(
     landfall: dict[str, Any] | None,
     heading_towards: str | None = None,
     distance_to_coast: float | None = None,
+    from_home: bool = False,
 ) -> str:
-    """One line of plain Vietnamese about where the storm is going."""
-    if landfall:
-        when = local_time_text(landfall.get("time"))
-        return (
-            f"Dự kiến vào khu vực {landfall['province']}"
-            + (f" khoảng {when}" if when else "")
-            + f" (theo {landfall['model'].upper()})"
-        )
-    if heading_towards and distance_to_coast is not None:
-        return (
-            f"Chưa có dấu hiệu vào đất liền; gần bờ {heading_towards} nhất "
-            f"khoảng {round(distance_to_coast)} km"
-        )
-    return "Chưa có dấu hiệu vào đất liền Việt Nam"
+    """One line of plain Vietnamese about where the storm is going.
+
+    Three situations, told apart by the track: the storm has already come
+    ashore, it is forecast to, or nothing on its track reaches the coast.
+
+    `from_home` adds how far the landfall point is from the configured
+    location — the figure that says whether the storm is coming for you, rather
+    than how far it still has to travel. It belongs on the "nearest storm"
+    sensor and would only be noise repeated on every individual storm.
+    """
+    if not landfall:
+        if heading_towards and distance_to_coast is not None:
+            return (
+                f"Chưa có dấu hiệu vào đất liền; gần bờ {heading_towards} nhất "
+                f"khoảng {round(distance_to_coast)} km"
+            )
+        return "Chưa có dấu hiệu vào đất liền Việt Nam"
+
+    when = local_time_text(landfall.get("time"))
+    force = landfall.get("beaufort")
+    home = landfall.get("distance_from_home_km") if from_home else None
+
+    if landfall.get("status") == "past":
+        parts = [f"Đã vào khu vực {landfall['province']}"]
+        if when:
+            parts[0] += f" lúc {when}"
+        if home is not None:
+            parts.append(f"cách bạn {round(home)} km")
+        if force:
+            parts.append(f"cấp {force} khi vào bờ")
+        return ", ".join(parts)
+
+    parts = [f"Dự kiến vào khu vực {landfall['province']}"]
+    if when:
+        parts[0] += f" khoảng {when}"
+    remaining = landfall.get("distance_from_storm_km")
+    if remaining is not None:
+        leg = f"còn khoảng {round(remaining)} km"
+        hours = landfall.get("hours_away")
+        if hours is not None and hours > 0:
+            leg += f" (~{round(hours)} giờ nữa)"
+        parts.append(leg)
+    if home is not None:
+        parts.append(f"cách bạn {round(home)} km")
+    if force:
+        parts.append(f"cấp {force} khi đổ bộ")
+    return ", ".join(parts) + f" (theo {landfall['model'].upper()})"
 
 
 async def _get_json(
@@ -409,7 +487,7 @@ async def get_storms(
     for storm in storms:
         if storm.get("id") not in detailed_ids:
             continue
-        await _add_storm_detail(session, storm)
+        await _add_storm_detail(session, storm, latitude, longitude)
 
     nearest = storms[0] if storms else None
 
@@ -430,9 +508,16 @@ async def get_storms(
 
 
 async def _add_storm_detail(
-    session: aiohttp.ClientSession, storm: dict[str, Any]
+    session: aiohttp.ClientSession,
+    storm: dict[str, Any],
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> None:
-    """Attach track, movement and landfall estimate to a storm, in place."""
+    """Attach track, movement and landfall estimate to a storm, in place.
+
+    `latitude`/`longitude` are the configured location, used to work out how far
+    the landfall point is from it.
+    """
     detail = await _get_json(session, f"{WINDY_STORMS_URL}/{storm['id']}")
     if not isinstance(detail, dict):
         return
@@ -479,12 +564,49 @@ async def _add_storm_detail(
         storm["nearest_coast"] = province
         storm["distance_to_coast_km"] = distance
 
-    landfall = predict_landfall(forecasts)
+    landfall = predict_landfall(forecasts, history)
+    if landfall:
+        # How much further the storm still has to travel to get there, and how
+        # long that leaves. Both are meaningless once it has already landed.
+        landfall["hours_away"] = hours_until(landfall.get("time"))
+        if (
+            landfall.get("status") == "forecast"
+            and storm.get("latitude") is not None
+            and storm.get("longitude") is not None
+            and landfall.get("latitude") is not None
+        ):
+            landfall["distance_from_storm_km"] = distance_km(
+                storm["latitude"],
+                storm["longitude"],
+                landfall["latitude"],
+                landfall["longitude"],
+            )
+        # A different question from the one above: not how far the storm still
+        # has to go, but how close it will come ashore to where you live.
+        if (
+            latitude is not None
+            and longitude is not None
+            and landfall.get("latitude") is not None
+        ):
+            landfall["distance_from_home_km"] = distance_km(
+                latitude, longitude, landfall["latitude"], landfall["longitude"]
+            )
+        landfall["time_text"] = local_time_text(landfall.get("time"))
+
     storm["landfall"] = landfall
     storm["landfall_text"] = describe_landfall(
         landfall,
         storm.get("nearest_coast"),
         storm.get("distance_to_coast_km"),
+    )
+    # Same sentence with the distance from the configured location added, for
+    # the "nearest storm" sensor. Kept as a second string because the nearest
+    # storm and storm slot 1 are the same record.
+    storm["landfall_text_from_home"] = describe_landfall(
+        landfall,
+        storm.get("nearest_coast"),
+        storm.get("distance_to_coast_km"),
+        from_home=True,
     )
 
 

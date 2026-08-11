@@ -11,16 +11,24 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 from homeassistant.config_entries import ConfigEntry
 
 from .const import (
-    DOMAIN, 
-    CONF_LOCATION_KEY, 
+    DOMAIN,
+    CONF_LOCATION_KEY,
     CONF_LOCATION_NAME,
+    CONF_SENSOR_LANGUAGE,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     MIN_UPDATE_INTERVAL,
-    MAX_UPDATE_INTERVAL
+    MAX_UPDATE_INTERVAL,
+    SENSOR_LANGUAGE_AUTO,
+    SENSOR_LANGUAGES,
 )
 from .fetcher import HtmlFetcher
 from .utils import get_location_keys
@@ -172,25 +180,41 @@ class OptionsFlow(config_entries.OptionsFlow):
             # Update the config entry data with new update interval
             new_data = dict(self.config_entry.data)
             new_data[CONF_UPDATE_INTERVAL] = user_input.get("update_interval", DEFAULT_UPDATE_INTERVAL)
-            
+            new_data[CONF_SENSOR_LANGUAGE] = user_input.get(
+                CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO
+            )
+
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
             )
-            
+
             # Reload the entry to apply new update interval
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
-            
+
             return self.async_create_entry(title="", data={})
 
         current_interval = self.config_entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-        
+        current_language = self.config_entry.data.get(
+            CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO
+        )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Optional(
-                    "update_interval", 
+                    "update_interval",
                     default=current_interval
-                ): vol.All(vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL))
+                ): vol.All(vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL)),
+                vol.Optional(
+                    CONF_SENSOR_LANGUAGE,
+                    default=current_language,
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=list(SENSOR_LANGUAGES),
+                        translation_key=CONF_SENSOR_LANGUAGE,
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
             }),
             description_placeholders={
                 "current_interval": str(current_interval // 60),

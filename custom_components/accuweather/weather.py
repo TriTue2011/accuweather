@@ -65,11 +65,14 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
     _attr_native_wind_speed_unit = UnitOfSpeed.KILOMETERS_PER_HOUR
     _attr_native_visibility_unit = UnitOfLength.KILOMETERS
     _attr_native_precipitation_unit = UnitOfPrecipitationDepth.MILLIMETERS
+    # The main entity of the device: no name of its own, so Home Assistant
+    # displays the device name ("AccuWeather <location>") on its own.
+    _attr_has_entity_name = True
+    _attr_name = None
 
     def __init__(self, coordinator: AccuWeatherDataUpdateCoordinator) -> None:
         """Initialize the weather entity."""
         super().__init__(coordinator)
-        self._attr_name = f"AccuWeather {coordinator.location_name}"
         self._attr_unique_id = f"accuweather_{coordinator.location_key}"
         self._attr_device_info = get_device_info(coordinator.location_key, coordinator.location_name)
 

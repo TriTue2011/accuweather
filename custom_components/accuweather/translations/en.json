@@ -59,12 +59,82 @@
         "title": "Update AccuWeather Settings",
         "description": "Change settings for AccuWeather integration. You can adjust the weather data update frequency.",
         "data": {
-          "update_interval": "Update Interval (seconds)"
+          "update_interval": "Update Interval (seconds)",
+          "sensor_language": "Sensor name language"
         },
         "data_description": {
-          "update_interval": "Time between data updates (300-3600 seconds)"
+          "update_interval": "Time between data updates (300-3600 seconds)",
+          "sensor_language": "Language of the sensor names, independent of the interface language. Entity IDs stay as they are."
         }
       }
+    }
+  },
+  "selector": {
+    "sensor_language": {
+      "options": {
+        "auto": "Follow Home Assistant",
+        "vi": "Vietnamese",
+        "en": "English"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "realfeel_temperature": { "name": "RealFeel temperature" },
+      "realfeel_shade_temperature": { "name": "RealFeel shade temperature" },
+      "humidity": { "name": "Humidity" },
+      "pressure": { "name": "Pressure" },
+      "wind_speed": { "name": "Wind speed" },
+      "wind_bearing": { "name": "Wind bearing" },
+      "wind_gust": { "name": "Wind gust" },
+      "visibility": { "name": "Visibility" },
+      "cloud_coverage": { "name": "Cloud coverage" },
+      "uv_index": { "name": "UV index" },
+      "dew_point": { "name": "Dew point" },
+      "pm25": { "name": "PM2.5" },
+      "pm10": { "name": "PM10" },
+      "ozone": { "name": "Ozone" },
+      "nitrogen_dioxide": { "name": "Nitrogen dioxide" },
+      "sulfur_dioxide": { "name": "Sulfur dioxide" },
+      "carbon_monoxide": { "name": "Carbon monoxide" },
+      "cloud_ceiling": { "name": "Cloud ceiling" },
+      "heat_index": { "name": "Heat index" },
+      "aqi": { "name": "Air quality index" },
+      "aqi_category": { "name": "Air quality category" },
+      "sunrise": { "name": "Sunrise" },
+      "sunset": { "name": "Sunset" },
+      "moon_phase": { "name": "Moon phase" },
+      "minutecast": { "name": "MinuteCast precipitation" },
+      "storm_count": { "name": "Storm count" },
+      "storm_nearby_count": { "name": "Nearby storm count" },
+      "storm_nearest_distance": { "name": "Nearest storm distance" },
+      "storm_nearest_beaufort": { "name": "Nearest storm force (Beaufort)" },
+      "storm_movement": { "name": "Nearest storm movement" },
+      "storm_landfall": { "name": "Nearest storm landfall" },
+      "weather_alerts": { "name": "Weather alerts" },
+      "storm_slot": { "name": "Storm {number}" },
+      "health_asthma": { "name": "Asthma" },
+      "health_arthritis": { "name": "Arthritis" },
+      "health_migraine": { "name": "Migraine" },
+      "health_dust_dander": { "name": "Dust and dander" },
+      "health_common_cold": { "name": "Common cold" },
+      "health_flu": { "name": "Flu" },
+      "health_sinus": { "name": "Sinus" },
+      "health_running": { "name": "Running" },
+      "health_hiking": { "name": "Hiking" },
+      "health_biking": { "name": "Biking" },
+      "health_golf": { "name": "Golf" },
+      "health_sun_sand": { "name": "Sun and sand" },
+      "health_astronomy": { "name": "Astronomy" },
+      "health_fishing": { "name": "Fishing" },
+      "health_air_travel": { "name": "Air travel" },
+      "health_driving": { "name": "Driving" },
+      "health_lawn_mowing": { "name": "Lawn mowing" },
+      "health_composting": { "name": "Composting" },
+      "health_mosquito_activity": { "name": "Mosquito activity" },
+      "health_indoor_pests": { "name": "Indoor pests" },
+      "health_outdoor_pests": { "name": "Outdoor pests" },
+      "health_outdoor_entertaining": { "name": "Outdoor entertaining" }
     }
   }
 }

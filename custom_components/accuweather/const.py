@@ -5,12 +5,26 @@ DOMAIN = "accuweather"
 # Shown on the device page. Keep VERSION in step with manifest.json — the device
 # page used to advertise 2026.4.22 while the manifest had moved on.
 MANUFACTURER = "TriTue2011"
-VERSION = "2026.8.11"
+VERSION = "2026.8.12"
 
 # Config flow
 CONF_LOCATION_KEY = "location_key"
 CONF_LOCATION_NAME = "location_name"
 CONF_UPDATE_INTERVAL = "update_interval"
+
+# Language of the sensor names. "auto" leaves it to Home Assistant, which uses
+# the language set in Settings; the other values pin the names to one language
+# regardless of it, for people running an English UI who want Vietnamese
+# sensors (or the reverse).
+CONF_SENSOR_LANGUAGE = "sensor_language"
+SENSOR_LANGUAGE_AUTO = "auto"
+SENSOR_LANGUAGES: tuple[str, ...] = (SENSOR_LANGUAGE_AUTO, "vi", "en")
+
+# Home Assistant builds entity ids from the local language only for languages it
+# can slugify safely; Vietnamese is not one of them, so a Vietnamese install
+# still gets English entity ids. Pinning the sensor language must not change
+# that, so entity ids keep following this language.
+LANGUAGE_FOR_ENTITY_IDS = "en"
 
 # Update intervals. Every cycle reloads the two pages that actually change
 # minute to minute (current conditions and MinuteCast) plus the storm feed;
@@ -52,6 +66,12 @@ STORM_TRACK_POINTS = 12
 
 # A forecast track point this close to the coast counts as reaching land.
 LANDFALL_THRESHOLD_KM = 80
+
+# Saying a storm has ALREADY come ashore is a stronger claim than saying one is
+# heading for the coast, so an observed track point has to be closer than a
+# forecast one before it counts. At 80 km a storm merely passing along the coast
+# would read as having hit it.
+LANDFALL_OBSERVED_KM = 45
 
 # Coastal reference points, roughly on the shoreline of each coastal province,
 # used to name where a storm is heading. Ordered north to south.

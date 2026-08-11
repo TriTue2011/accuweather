@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -21,11 +21,15 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_SENSOR_LANGUAGE,
     DOMAIN,
     LANDFALL_MODEL_PRIORITY,
+    LANGUAGE_FOR_ENTITY_IDS,
+    SENSOR_LANGUAGE_AUTO,
     STORM_SLOTS,
     STORM_TRACK_POINTS,
 )
@@ -44,77 +48,80 @@ _POLUTANT_KEY_MAP: dict[str, str] = {
     "carbon_monoxide": "CO"
 }
 
+# Entity names come from translations/<lang>.json via translation_key, so Home
+# Assistant renames every sensor when the user switches language. The key is
+# reused as the translation key: unique_id is built from key and must not move.
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     # Basic weather sensors
     SensorEntityDescription(
         key="realfeel_temperature",
-        name="RealFeel Temperature",
+        translation_key="realfeel_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     ),
     SensorEntityDescription(
         key="realfeel_shade_temperature",
-        name="RealFeel Shade Temperature",
+        translation_key="realfeel_shade_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     ),
     SensorEntityDescription(
         key="humidity",
-        name="Humidity",
+        translation_key="humidity",
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE,
     ),
     SensorEntityDescription(
         key="pressure",
-        name="Pressure",
+        translation_key="pressure",
         device_class=SensorDeviceClass.PRESSURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPressure.HPA,
     ),
     SensorEntityDescription(
         key="wind_speed",
-        name="Wind Speed",
+        translation_key="wind_speed",
         device_class=SensorDeviceClass.WIND_SPEED,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfSpeed.KILOMETERS_PER_HOUR,
     ),
     SensorEntityDescription(
         key="wind_bearing",
-        name="Wind Bearing",
+        translation_key="wind_bearing",
         icon="mdi:compass",
     ),
     SensorEntityDescription(
         key="wind_gust",
-        name="Wind Gust",
+        translation_key="wind_gust",
         device_class=SensorDeviceClass.WIND_SPEED,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfSpeed.KILOMETERS_PER_HOUR,
     ),
     SensorEntityDescription(
         key="visibility",
-        name="Visibility",
+        translation_key="visibility",
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
     ),
     SensorEntityDescription(
         key="cloud_coverage",
-        name="Cloud Coverage",
+        translation_key="cloud_coverage",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE,
     ),
     SensorEntityDescription(
         key="uv_index",
-        name="UV Index",
+        translation_key="uv_index",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="UV index",
     ),
     SensorEntityDescription(
         key="dew_point",
-        name="Dew Point",
+        translation_key="dew_point",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -122,90 +129,90 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     # Air quality sensors
     SensorEntityDescription(
         key="pm25",
-        name="PM2.5",
+        translation_key="pm25",
         device_class=SensorDeviceClass.PM25,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="pm10",
-        name="PM10",
+        translation_key="pm10",
         device_class=SensorDeviceClass.PM10,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="ozone",
-        name="Ozone",
+        translation_key="ozone",
         device_class=SensorDeviceClass.OZONE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="nitrogen_dioxide",
-        name="Nitrogen Dioxide",
+        translation_key="nitrogen_dioxide",
         device_class=SensorDeviceClass.NITROGEN_DIOXIDE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="sulfur_dioxide",
-        name="Sulfur Dioxide",
+        translation_key="sulfur_dioxide",
         device_class=SensorDeviceClass.SULPHUR_DIOXIDE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="carbon_monoxide",
-        name="Carbon Monoxide",
+        translation_key="carbon_monoxide",
         device_class=SensorDeviceClass.CO,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="cloud_ceiling",
-        name="Cloud Ceiling",
+        translation_key="cloud_ceiling",
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.METERS,
     ),
     SensorEntityDescription(
         key="heat_index",
-        name="Heat Index",
+        translation_key="heat_index",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     ),
     SensorEntityDescription(
         key="aqi",
-        name="Air Quality Index",
+        translation_key="aqi",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:air-filter",
     ),
     SensorEntityDescription(
         key="aqi_category",
-        name="Air Quality Category",
+        translation_key="aqi_category",
         icon="mdi:air-filter",
     ),
     SensorEntityDescription(
         key="sunrise",
-        name="Sunrise",
+        translation_key="sunrise",
         icon="mdi:weather-sunset-up",
     ),
     SensorEntityDescription(
         key="sunset",
-        name="Sunset",
+        translation_key="sunset",
         icon="mdi:weather-sunset-down",
     ),
     SensorEntityDescription(
         key="moon_phase",
-        name="Moon Phase",
+        translation_key="moon_phase",
         icon="mdi:moon-waning-crescent",
     ),
     # MinuteCast sensor
     SensorEntityDescription(
         key="minutecast",
-        name="MinuteCast Precipitation",
+        translation_key="minutecast",
         icon="mdi:radar",
     ),
 )
@@ -214,36 +221,42 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
 STORM_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="storm_count",
-        name="Storm Count",
+        translation_key="storm_count",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:weather-hurricane",
     ),
     SensorEntityDescription(
         key="storm_nearby_count",
-        name="Nearby Storm Count",
+        translation_key="storm_nearby_count",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:weather-hurricane",
     ),
     SensorEntityDescription(
         key="storm_nearest_distance",
-        name="Nearest Storm Distance",
+        translation_key="storm_nearest_distance",
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
     ),
     SensorEntityDescription(
+        key="storm_nearest_beaufort",
+        translation_key="storm_nearest_beaufort",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:windsock",
+    ),
+    SensorEntityDescription(
         key="storm_movement",
-        name="Nearest Storm Movement",
+        translation_key="storm_movement",
         icon="mdi:compass-outline",
     ),
     SensorEntityDescription(
         key="storm_landfall",
-        name="Nearest Storm Landfall",
+        translation_key="storm_landfall",
         icon="mdi:map-marker-alert",
     ),
     SensorEntityDescription(
         key="weather_alerts",
-        name="Weather Alerts",
+        translation_key="weather_alerts",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:alert-outline",
     ),
@@ -259,20 +272,27 @@ async def async_setup_entry(
 ) -> None:
     """Set up AccuWeather sensor entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    
+
+    names = await async_name_overrides(
+        hass,
+        config_entry.data.get(CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO),
+    )
+
     entities = []
-    
+
     # Add static sensor types
     for description in SENSOR_TYPES:
-        entities.append(AccuWeatherSensorEntity(coordinator, description))
+        entities.append(AccuWeatherSensorEntity(coordinator, description, names))
 
     # Storm tracking (Windy). One sensor per slot so the entity ids stay stable
     # as storms form and dissipate, plus the summary sensors.
     for description in STORM_SENSOR_TYPES:
-        entities.append(AccuWeatherStormSummarySensor(coordinator, description))
+        entities.append(
+            AccuWeatherStormSummarySensor(coordinator, description, names)
+        )
 
     for slot in range(STORM_SLOTS):
-        entities.append(AccuWeatherStormSensor(coordinator, slot))
+        entities.append(AccuWeatherStormSensor(coordinator, slot, names))
 
     # Add dynamic health activity sensors
     health_count = 0
@@ -284,17 +304,161 @@ async def async_setup_entry(
                 activity_name = activity.get("name")
                 activity_slug = activity.get("slug")
                 if activity_name and activity_slug:
-                    # Create sensor description for this health activity
-                    health_desc = SensorEntityDescription(
-                        key=f"health_{activity_slug.replace('-', '_')}",
-                        name=activity_name,
-                        icon=get_health_icon(activity_slug),
+                    # Create sensor description for this health activity. The
+                    # slugs AccuWeather publishes today are translated; anything
+                    # new keeps the name the site itself returned.
+                    slug_key = activity_slug.replace("-", "_")
+                    if activity_slug in HEALTH_TRANSLATED_SLUGS:
+                        health_desc = SensorEntityDescription(
+                            key=f"health_{slug_key}",
+                            translation_key=f"health_{slug_key}",
+                            icon=get_health_icon(activity_slug),
+                        )
+                    else:
+                        health_desc = SensorEntityDescription(
+                            key=f"health_{slug_key}",
+                            name=activity_name,
+                            icon=get_health_icon(activity_slug),
+                        )
+                    entities.append(
+                        AccuWeatherHealthSensorEntity(
+                            coordinator, health_desc, activity, names
+                        )
                     )
-                    entities.append(AccuWeatherHealthSensorEntity(coordinator, health_desc, activity))
                     health_count += 1
-    
+
     _LOGGER.info("AccuWeather: Created %d health activity sensors", health_count)
     async_add_entities(entities, False)
+
+
+class SensorNames(NamedTuple):
+    """Names to show, and the English names entity ids are built from."""
+
+    display: dict[str, str]
+    object_id: dict[str, str]
+
+
+async def _async_sensor_names(hass: HomeAssistant, language: str) -> dict[str, str]:
+    """Read entity names for one language out of translations/<lang>.json."""
+    prefix = f"component.{DOMAIN}.entity.sensor."
+    suffix = ".name"
+    # A language with no file of its own falls back to English in here, so an
+    # unexpected value still produces readable names rather than raw keys.
+    translations = await async_get_translations(hass, language, "entity", {DOMAIN})
+    return {
+        key[len(prefix):-len(suffix)]: value
+        for key, value in translations.items()
+        if key.startswith(prefix) and key.endswith(suffix)
+    }
+
+
+async def async_name_overrides(
+    hass: HomeAssistant, language: str
+) -> SensorNames | None:
+    """Sensor names in `language`, or None to let Home Assistant decide.
+
+    Home Assistant names entities in the language set in Settings, which is also
+    the language of the whole interface. Plenty of people run the interface in
+    English and still want Vietnamese sensor names, so this option pins the
+    names to one language on its own.
+
+    Entity ids are a separate matter. Home Assistant only builds them from the
+    local language for languages it can slugify safely, a list Vietnamese is not
+    on, so a Vietnamese installation still gets English entity ids. Pinning the
+    name alone would drag the entity id along with it and quietly break that
+    rule, so the English name is kept for the id.
+    """
+    if language == SENSOR_LANGUAGE_AUTO:
+        return None
+
+    display = await _async_sensor_names(hass, language)
+    object_id = (
+        display
+        if language == LANGUAGE_FOR_ENTITY_IDS
+        else await _async_sensor_names(hass, LANGUAGE_FOR_ENTITY_IDS)
+    )
+    return SensorNames(display=display, object_id=object_id)
+
+
+def landfall_attributes(storm: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the landfall estimate into attributes a card can read directly.
+
+    The nested `landfall` mapping stays as it is for anyone already using it;
+    these are the same figures one level up, where a template can reach them
+    without an existence check on every step.
+    """
+    landfall = storm.get("landfall") or {}
+    return {
+        # "past" once the storm has come ashore, "forecast" while it is still
+        # heading in, absent when nothing on its track reaches the coast.
+        "landfall_status": landfall.get("status"),
+        "landfall_province": landfall.get("province"),
+        "landfall_time": landfall.get("time"),
+        "landfall_time_text": landfall.get("time_text"),
+        "landfall_beaufort": landfall.get("beaufort"),
+        "landfall_wind_speed_kmh": landfall.get("wind_speed_kmh"),
+        "landfall_model": landfall.get("model"),
+        # How much further the storm has to travel, and how long that leaves.
+        "distance_to_landfall_km": landfall.get("distance_from_storm_km"),
+        "hours_to_landfall": landfall.get("hours_away"),
+        # A different distance: from the configured location to the landfall
+        # point. This one says whether the storm is coming for you. Every storm
+        # sensor carries the figure; only the nearest-storm sensor says it out
+        # loud in its state.
+        "landfall_distance_from_home_km": landfall.get("distance_from_home_km"),
+    }
+
+
+class AccuWeatherNameMixin:
+    """Applies the name language chosen in the options, if any.
+
+    With no override the entity keeps Home Assistant's own behaviour: the name
+    comes from the translation key, in the language from Settings.
+    """
+
+    # The displayed name is the device name plus the entity name, which is what
+    # makes the entity name translatable at all.
+    _attr_has_entity_name = True
+    # English name, used for the entity id only. None means "leave it to Home
+    # Assistant", which is the case whenever no language is pinned.
+    _object_id_name: str | None = None
+
+    def _apply_names(
+        self,
+        names: SensorNames | None,
+        translation_key: str | None,
+        placeholders: dict[str, str] | None = None,
+    ) -> None:
+        """Pin the visible name, keeping the English one for the entity id."""
+        if not names or not translation_key:
+            return
+        if display := names.display.get(translation_key):
+            self._attr_name = (
+                display.format(**placeholders) if placeholders else display
+            )
+        if object_id := names.object_id.get(translation_key):
+            self._object_id_name = (
+                object_id.format(**placeholders) if placeholders else object_id
+            )
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Build the entity id from the English name when one is pinned."""
+        if self._object_id_name:
+            return self._object_id_name
+        return super().suggested_object_id  # type: ignore[misc]
+
+
+# Health activity slugs that have a name in translations/<lang>.json. A slug
+# outside this set falls back to the name AccuWeather returned, so a new index
+# still gets a sensor instead of a blank label.
+HEALTH_TRANSLATED_SLUGS: frozenset[str] = frozenset({
+    "asthma", "arthritis", "migraine", "dust-dander", "common-cold", "flu",
+    "sinus", "running", "hiking", "biking", "golf", "sun-sand", "astronomy",
+    "fishing", "air-travel", "driving", "lawn-mowing", "composting",
+    "mosquito-activity", "indoor-pests", "outdoor-pests",
+    "outdoor-entertaining",
+})
 
 
 def get_health_icon(slug: str) -> str:
@@ -326,18 +490,23 @@ def get_health_icon(slug: str) -> str:
     return icon_map.get(slug, "mdi:information")
 
 
-class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity):
+class AccuWeatherSensorEntity(
+    AccuWeatherNameMixin,
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
+    SensorEntity,
+):
     """Implementation of AccuWeather sensor entity."""
 
     def __init__(
         self,
         coordinator: AccuWeatherDataUpdateCoordinator,
         description: SensorEntityDescription,
+        names: SensorNames | None = None,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_name = f"AccuWeather {coordinator.location_name} {description.name}"
+        self._apply_names(names, description.translation_key)
         self._attr_unique_id = f"accuweather_{coordinator.location_key}_{description.key}"
         self._attr_device_info = get_device_info(coordinator.location_key, coordinator.location_name)
 
@@ -494,7 +663,9 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
 
 
 class AccuWeatherStormSummarySensor(
-    CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity
+    AccuWeatherNameMixin,
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
+    SensorEntity,
 ):
     """Summary of the tropical cyclone situation from Windy."""
 
@@ -502,11 +673,12 @@ class AccuWeatherStormSummarySensor(
         self,
         coordinator: AccuWeatherDataUpdateCoordinator,
         description: SensorEntityDescription,
+        names: SensorNames | None = None,
     ) -> None:
         """Initialize the storm summary sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_name = f"AccuWeather {coordinator.location_name} {description.name}"
+        self._apply_names(names, description.translation_key)
         self._attr_unique_id = f"accuweather_{coordinator.location_key}_{description.key}"
         self._attr_device_info = get_device_info(
             coordinator.location_key, coordinator.location_name
@@ -534,6 +706,8 @@ class AccuWeatherStormSummarySensor(
             return storms.get("nearby_count", 0)
         if key == "storm_nearest_distance":
             return nearest.get("distance_km")
+        if key == "storm_nearest_beaufort":
+            return nearest.get("beaufort")
         if key == "storm_movement":
             if not nearest:
                 return NO_STORM
@@ -541,7 +715,13 @@ class AccuWeatherStormSummarySensor(
         if key == "storm_landfall":
             if not nearest:
                 return NO_STORM
-            return nearest.get("landfall_text") or "Chưa có dấu hiệu vào đất liền"
+            # The nearest storm is the one picked by distance from the
+            # configured location, so this is where that distance belongs.
+            return (
+                nearest.get("landfall_text_from_home")
+                or nearest.get("landfall_text")
+                or "Chưa có dấu hiệu vào đất liền"
+            )
         if key == "weather_alerts":
             return len(self._data.get("alerts") or [])
         return None
@@ -572,6 +752,14 @@ class AccuWeatherStormSummarySensor(
                     "classification": storm.get("classification"),
                     "movement": storm.get("movement_text"),
                     "landfall": storm.get("landfall_text"),
+                    "landfall_status": (storm.get("landfall") or {}).get("status"),
+                    "landfall_province": (storm.get("landfall") or {}).get("province"),
+                    "distance_to_landfall_km": (
+                        (storm.get("landfall") or {}).get("distance_from_storm_km")
+                    ),
+                    "landfall_distance_from_home_km": (
+                        (storm.get("landfall") or {}).get("distance_from_home_km")
+                    ),
                 }
                 for storm in storms.get("storms", [])
             ]
@@ -594,11 +782,14 @@ class AccuWeatherStormSummarySensor(
                 "distance_to_coast_km": nearest.get("distance_to_coast_km"),
                 "landfall": nearest.get("landfall"),
             })
+            attrs.update(landfall_attributes(nearest))
         return attrs
 
 
 class AccuWeatherStormSensor(
-    CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity
+    AccuWeatherNameMixin,
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
+    SensorEntity,
 ):
     """One active tropical cyclone, ordered by distance from the location."""
 
@@ -608,18 +799,20 @@ class AccuWeatherStormSensor(
         self,
         coordinator: AccuWeatherDataUpdateCoordinator,
         slot: int,
+        names: SensorNames | None = None,
     ) -> None:
         """Initialize a storm slot sensor."""
         super().__init__(coordinator)
         self._slot = slot
         self.entity_description = SensorEntityDescription(
             key=f"storm_{slot + 1}",
-            name=f"Storm {slot + 1}",
+            translation_key="storm_slot",
             icon="mdi:weather-hurricane",
         )
-        self._attr_name = (
-            f"AccuWeather {coordinator.location_name} Storm {slot + 1}"
-        )
+        # One translated name shared by every slot, numbered by placeholder.
+        placeholders = {"number": str(slot + 1)}
+        self._attr_translation_placeholders = placeholders
+        self._apply_names(names, "storm_slot", placeholders)
         self._attr_unique_id = (
             f"accuweather_{coordinator.location_key}_storm_{slot + 1}"
         )
@@ -638,13 +831,19 @@ class AccuWeatherStormSensor(
 
     @property
     def native_value(self) -> Any:
-        """Return the storm name, or a plain "no storm" for an unused slot."""
+        """Name the storm the way a Vietnamese bulletin would.
+
+        "Bão mạnh Yagi cấp 12" — intensity wording, name, then the Beaufort
+        force, which is the number people actually act on.
+        """
         storm = self._storm
         if not storm:
             return NO_STORM
         name = storm.get("name") or "?"
         classification = storm.get("classification")
-        return f"{classification} {name}" if classification else name
+        beaufort = storm.get("beaufort")
+        text = f"{classification} {name}" if classification else name
+        return f"{text} cấp {beaufort}" if beaufort else text
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -674,6 +873,7 @@ class AccuWeatherStormSensor(
             "nearest_coast": storm.get("nearest_coast"),
             "distance_to_coast_km": storm.get("distance_to_coast_km"),
             "forecast_models": storm.get("forecast_models"),
+            **landfall_attributes(storm),
         }
 
         # Trim the tracks: full history can run to 56 points per storm, and
@@ -695,7 +895,11 @@ class AccuWeatherStormSensor(
         return attrs
 
 
-class AccuWeatherHealthSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], SensorEntity):
+class AccuWeatherHealthSensorEntity(
+    AccuWeatherNameMixin,
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
+    SensorEntity,
+):
     """Implementation of AccuWeather health activity sensor entity."""
 
     def __init__(
@@ -703,12 +907,13 @@ class AccuWeatherHealthSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoord
         coordinator: AccuWeatherDataUpdateCoordinator,
         description: SensorEntityDescription,
         activity_data: dict[str, Any],
+        names: SensorNames | None = None,
     ) -> None:
         """Initialize the health sensor."""
         super().__init__(coordinator)
         self.entity_description = description
         self._activity_data = activity_data
-        self._attr_name = f"AccuWeather {coordinator.location_name} {description.name}"
+        self._apply_names(names, description.translation_key)
         self._attr_unique_id = f"accuweather_{coordinator.location_key}_{description.key}"
         self._attr_device_info = get_device_info(coordinator.location_key, coordinator.location_name)
 
