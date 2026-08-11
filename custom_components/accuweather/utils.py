@@ -204,8 +204,8 @@ async def _fetch_with_retry(
     Raises BlockedError when the CDN answers with a bot-protection status, so the
     coordinator can tell "blocked" apart from "page layout changed".
     """
-    max_attempts = RETRY_COUNT
-    for attempt in range(1, max_attempts + 1):
+    blocked_attempts = 0
+    for attempt in range(1, RETRY_COUNT + 1):
         try:
             client_timeout = aiohttp.ClientTimeout(
                 total=None,
@@ -219,14 +219,20 @@ async def _fetch_with_retry(
                 if response.status == 200:
                     return await response.text()
                 if response.status in BLOCKED_HTTP_ERRORS:
-                    max_attempts = BLOCKED_RETRY_COUNT
-                    if attempt >= max_attempts:
+                    blocked_attempts += 1
+                    if blocked_attempts >= BLOCKED_RETRY_COUNT:
                         raise BlockedError(response.status, url)
-                    delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1))
+                    # Drop the cookies before retrying. A stale Akamai clearance
+                    # cookie is one of the ways a working setup starts returning
+                    # 403 out of nowhere; starting a fresh handshake recovers it
+                    # without waiting for Home Assistant to be restarted.
+                    session.cookie_jar.clear()
+                    delay = INITIAL_RETRY_DELAY * (2 ** (blocked_attempts - 1))
                     _LOGGER.debug(
-                        "HTTP %d (bot protection) for %s (attempt %d/%d), "
-                        "retrying in %.1fs...",
-                        response.status, url, attempt, max_attempts, delay,
+                        "HTTP %d (bot protection) for %s (attempt %d/%d), cleared "
+                        "cookies, retrying in %.1fs...",
+                        response.status, url, blocked_attempts,
+                        BLOCKED_RETRY_COUNT, delay,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -234,14 +240,14 @@ async def _fetch_with_retry(
                     delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
                     _LOGGER.debug(
                         "HTTP %d for %s (attempt %d/%d), retrying in %.1fs...",
-                        response.status, url, attempt, max_attempts, delay,
+                        response.status, url, attempt, RETRY_COUNT, delay,
                     )
-                    if attempt < max_attempts:
+                    if attempt < RETRY_COUNT:
                         await asyncio.sleep(delay)
                     continue
                 _LOGGER.debug(
                     "HTTP %d for %s (attempt %d/%d), not retrying",
-                    response.status, url, attempt, max_attempts,
+                    response.status, url, attempt, RETRY_COUNT,
                 )
                 return None
         except BlockedError:
@@ -250,27 +256,27 @@ async def _fetch_with_retry(
             delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
             _LOGGER.debug(
                 "Timeout for %s (attempt %d/%d), retrying in %.1fs...",
-                url, attempt, max_attempts, delay,
+                url, attempt, RETRY_COUNT, delay,
             )
-            if attempt < max_attempts:
+            if attempt < RETRY_COUNT:
                 await asyncio.sleep(delay)
         except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError) as e:
             delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
             _LOGGER.debug(
                 "%s for %s (attempt %d/%d): %s, retrying in %.1fs...",
-                type(e).__name__, url, attempt, max_attempts, e, delay,
+                type(e).__name__, url, attempt, RETRY_COUNT, e, delay,
             )
-            if attempt < max_attempts:
+            if attempt < RETRY_COUNT:
                 await asyncio.sleep(delay)
         except Exception as e:
             delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
             _LOGGER.debug(
                 "Exception for %s (attempt %d/%d): %s: %s, retrying in %.1fs...",
-                url, attempt, max_attempts, type(e).__name__, e, delay,
+                url, attempt, RETRY_COUNT, type(e).__name__, e, delay,
             )
-            if attempt < max_attempts:
+            if attempt < RETRY_COUNT:
                 await asyncio.sleep(delay)
-    _LOGGER.debug("All %d attempts failed for %s", max_attempts, url)
+    _LOGGER.debug("All %d attempts failed for %s", RETRY_COUNT, url)
     return None
 
 
@@ -452,6 +458,38 @@ def _parse_temp_history(soup: BeautifulSoup, unit: str) -> dict[str, Any]:
     return history
 
 
+def parse_clock_minutes(text: str | None) -> int | None:
+    """Turn "05:33" into minutes since midnight."""
+    if not text:
+        return None
+    match = re.search(r'(\d{1,2}):(\d{2})', str(text))
+    if not match:
+        return None
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def night_variant(condition: str | None, is_night: bool) -> str | None:
+    """Swap daylight-only conditions for their night equivalent.
+
+    AccuWeather writes "Trời quang" both day and night, which mapped to `sunny`
+    and put a sun icon on a 22:00 forecast.
+    """
+    if not is_night:
+        return condition
+    if condition == 'sunny':
+        return 'clear-night'
+    return condition
+
+
+def is_night_at(
+    minutes: int | None, sunrise: int | None, sunset: int | None
+) -> bool:
+    """Whether a time of day falls outside daylight hours."""
+    if minutes is None or sunrise is None or sunset is None:
+        return False
+    return minutes < sunrise or minutes >= sunset
+
+
 async def parse_weather_html(html: str) -> dict[str, Any] | None:
     """Parse current weather HTML into normalised values.
 
@@ -544,9 +582,9 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
             'wind_bearing': wind_deg,
             'wind_bearing_text': wind_text,
             'wind_gust_speed': gust_speed,
-            'visibility': extract_numeric_value(details.get('Tầm nhìn')),
+            'visibility': parse_distance_km(details.get('Tầm nhìn')),
             'cloud_coverage': extract_numeric_value(details.get('Mật độ mây')),
-            'cloud_ceiling': extract_numeric_value(details.get('Trần mây')),
+            'cloud_ceiling': parse_length_m(details.get('Trần mây')),
             'uv_index': extract_numeric_value(details.get('Chỉ số UV tối đa')),
             'details': details,
         }
@@ -709,7 +747,7 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
                 'native_temperature': to_celsius(high, unit),
                 'native_templow': to_celsius(low, unit),
                 'precipitation_probability': precip_val,
-                'precipitation': extract_numeric_value(
+                'precipitation': parse_precipitation_mm(
                     details.get('Lượng mưa') or details.get('Mưa')
                 ),
                 'precipitation_hours': extract_numeric_value(

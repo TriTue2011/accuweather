@@ -24,9 +24,11 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 
 **Khác**
 
-- Hỗ trợ mọi địa điểm AccuWeather có (tìm theo tên, gồm 63 tỉnh thành và hầu hết quận/huyện)
+- Hỗ trợ mọi địa điểm AccuWeather có: tìm theo tên, gồm 63 tỉnh thành **và quận/huyện, phường/xã**. Thêm bao nhiêu địa điểm cũng được — mỗi địa điểm là một thiết bị riêng và **đều có đủ bộ sensor bão**, tính khoảng cách và hướng theo đúng toạ độ của địa điểm đó.
 - Tự nhận đơn vị của trang và quy đổi về °C, km/h, km, mm — không bị đọc 90°F thành 90°C
-- Tùy chọn thời gian cập nhật (5–60 phút, mặc định 15 phút)
+- Cập nhật mặc định 5 phút, nhưng **không phải lần nào cũng tải hết**: mỗi lượt chỉ tải lại thời tiết hiện tại, MinuteCast và dữ liệu bão; còn dự báo, chất lượng không khí và chỉ số sức khỏe tải lại mỗi 4 lượt. Nhờ vậy số request tới AccuWeather mỗi giờ *ít hơn* so với việc tải hết mỗi 15 phút, mà thông tin đang thay đổi lại về nhanh hơn ba lần.
+- Dữ liệu bão được **chia sẻ giữa mọi địa điểm**: thêm vị trí thứ hai hay thứ mười cũng không phát sinh thêm request tới Windy.
+- Tự phục hồi khi cookie hết hiệu lực: gặp HTTP 403 thì xoá cookie và bắt tay lại ngay trong lượt đó, không phải chờ khởi động lại Home Assistant.
 
 ## Cài đặt
 
@@ -130,7 +132,8 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
 ## Chú ý
 
-- Dữ liệu cập nhật theo thời gian đã cấu hình (mặc định 15 phút). Mỗi lượt cập nhật tải 8 trang AccuWeather, nên đặt dưới 10 phút sẽ tăng nguy cơ bị chặn.
+- **Không có cách nào để website tự đẩy thay đổi về Home Assistant.** AccuWeather chỉ là trang web (không có webhook/websocket), Windy cũng chỉ có endpoint HTTP với cache 60 giây — nên buộc phải hỏi lại theo chu kỳ. Cách gần nhất với „thay đổi là thấy" là chu kỳ ngắn nhưng chỉ tải phần hay đổi, và đó là cách tích hợp này đang làm (xem mục Tính năng). Nếu cần cập nhật ngay lập tức, gọi dịch vụ `homeassistant.update_entity` trên entity thời tiết trong tự động hoá của bạn.
+- Dữ liệu cập nhật theo thời gian đã cấu hình (mặc định 5 phút, tối thiểu 3 phút). Đặt quá ngắn vẫn tăng nguy cơ bị chặn vì mỗi lượt vẫn có 2 trang, và mỗi 4 lượt có 8 trang.
 - **Nếu tất cả entity thành „unavailable"**: xem log Home Assistant. Khi thấy thông báo „AccuWeather từ chối yêu cầu (HTTP 403)" thì mạng của bạn đang bị hệ thống chống bot của AccuWeather chặn — không phải lỗi cấu hình. Thử đổi mạng/DNS hoặc tăng thời gian cập nhật. Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
 - Dữ liệu bão lấy từ endpoint công khai của Windy, gộp sẵn JMA, NOAA NHC, UKMO, BoM, IMD cùng các mô hình tự dò trên ECMWF/GFS/ICON. Endpoint này không có tài liệu chính thức nên có thể thay đổi; khi đó các sensor bão sẽ trống chứ không làm hỏng phần thời tiết.
 - **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.

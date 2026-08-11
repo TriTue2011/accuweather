@@ -7,12 +7,18 @@ CONF_LOCATION_KEY = "location_key"
 CONF_LOCATION_NAME = "location_name"
 CONF_UPDATE_INTERVAL = "update_interval"
 
-# Update intervals. Each cycle now loads eight AccuWeather pages (current, daily,
-# three hourly days, air quality, health, MinuteCast), so the default is spaced
-# out to keep the request rate low enough to stay under the bot protection.
-DEFAULT_UPDATE_INTERVAL = 900  # 15 minutes
-MIN_UPDATE_INTERVAL = 300     # 5 minutes
+# Update intervals. Every cycle reloads the two pages that actually change
+# minute to minute (current conditions and MinuteCast) plus the storm feed;
+# forecasts, air quality and health indices are reloaded every
+# SLOW_REFRESH_EVERY cycles. At the 5-minute default that works out to fewer
+# AccuWeather requests per hour than a 15-minute full reload, while current
+# conditions and storms land three times sooner.
+DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes
+MIN_UPDATE_INTERVAL = 180     # 3 minutes
 MAX_UPDATE_INTERVAL = 3600    # 60 minutes
+
+# How many cycles between full reloads of the slow-moving pages.
+SLOW_REFRESH_EVERY = 4
 
 # Hourly forecast days to fetch. AccuWeather serves day 1..3 (72 hours) without
 # a Premium+ subscription; beyond that the pages are paywalled.

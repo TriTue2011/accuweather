@@ -12,15 +12,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL
+from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, SLOW_REFRESH_EVERY
 from .utils import (
     EMPTY_AIR_QUALITY,
     BlockedError,
     get_current_weather, get_daily_forecast, get_hourly_forecast,
     get_air_quality, crawl_all_health_activities, get_minutecast_data,
+    is_night_at, night_variant, parse_clock_minutes,
     slugify,
 )
-from .windy import get_alerts, get_storms
+from .windy import EMPTY_STORMS, get_alerts, get_storms
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +47,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         # Home Assistant location so storm tracking still works if it is missing.
         self.latitude: float | None = hass.config.latitude
         self.longitude: float | None = hass.config.longitude
+        # Pages that only need refreshing every few cycles, and the cycle counter
+        # that decides when.
+        self._slow_data: dict[str, Any] = {}
+        self._cycle = 0
 
         super().__init__(
             hass,
@@ -54,6 +59,31 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=update_interval),
             config_entry=config_entry,
         )
+
+    @staticmethod
+    def _apply_night_conditions(
+        current: dict[str, Any], hourly: list[dict[str, Any]]
+    ) -> None:
+        """Turn daylight conditions into night ones after sunset.
+
+        AccuWeather uses the same wording ("Trời quang") around the clock, so a
+        22:00 forecast came out as `sunny` with a sun icon.
+        """
+        sunrise = parse_clock_minutes(current.get("sunrise"))
+        sunset = parse_clock_minutes(current.get("sunset"))
+        if sunrise is None or sunset is None:
+            return
+
+        observed = parse_clock_minutes(current.get("time"))
+        if is_night_at(observed, sunrise, sunset):
+            current["condition"] = night_variant(current.get("condition"), True)
+
+        for hour in hourly:
+            hour_of_day = hour.get("hour")
+            if hour_of_day is None:
+                continue
+            if is_night_at(hour_of_day * 60, sunrise, sunset):
+                hour["condition"] = night_variant(hour.get("condition"), True)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library."""
@@ -77,49 +107,76 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
                     self.location_key,
                 )
 
-            await asyncio.sleep(0.5)
+            # Forecasts, air quality and health indices change on the scale of
+            # hours, and together they are six of the eight page loads. Refreshing
+            # them every few cycles instead of every cycle lets the interval be
+            # short — so current conditions and storms show up quickly — while the
+            # total request rate goes down, which is what keeps the bot protection
+            # from kicking in.
+            refresh_slow = (
+                self._cycle % SLOW_REFRESH_EVERY == 0 or not self._slow_data
+            )
+            self._cycle += 1
 
-            daily_forecast = await get_daily_forecast(self.session, self.location_key, self.location_slug)
-            if isinstance(daily_forecast, Exception):
-                _LOGGER.debug(
-                    "Exception getting daily forecast: %s: %s",
-                    type(daily_forecast).__name__,
-                    daily_forecast,
-                )
-                daily_forecast = []
+            if refresh_slow:
+                await asyncio.sleep(0.5)
 
-            await asyncio.sleep(0.5)
+                daily_forecast = await get_daily_forecast(self.session, self.location_key, self.location_slug)
+                if isinstance(daily_forecast, Exception):
+                    _LOGGER.debug(
+                        "Exception getting daily forecast: %s: %s",
+                        type(daily_forecast).__name__,
+                        daily_forecast,
+                    )
+                    daily_forecast = []
 
-            hourly_forecast = await get_hourly_forecast(self.session, self.location_key, self.location_slug)
-            if isinstance(hourly_forecast, Exception):
-                _LOGGER.debug(
-                    "Exception getting hourly forecast: %s: %s",
-                    type(hourly_forecast).__name__,
-                    hourly_forecast,
-                )
-                hourly_forecast = []
+                await asyncio.sleep(0.5)
 
-            await asyncio.sleep(0.5)
+                hourly_forecast = await get_hourly_forecast(self.session, self.location_key, self.location_slug)
+                if isinstance(hourly_forecast, Exception):
+                    _LOGGER.debug(
+                        "Exception getting hourly forecast: %s: %s",
+                        type(hourly_forecast).__name__,
+                        hourly_forecast,
+                    )
+                    hourly_forecast = []
 
-            air_quality = await get_air_quality(self.session, self.location_key, self.location_slug)
-            if isinstance(air_quality, Exception):
-                _LOGGER.debug(
-                    "Exception getting air quality: %s: %s",
-                    type(air_quality).__name__,
-                    air_quality,
-                )
-                air_quality = dict(EMPTY_AIR_QUALITY)
+                await asyncio.sleep(0.5)
 
-            await asyncio.sleep(0.5)
+                air_quality = await get_air_quality(self.session, self.location_key, self.location_slug)
+                if isinstance(air_quality, Exception):
+                    _LOGGER.debug(
+                        "Exception getting air quality: %s: %s",
+                        type(air_quality).__name__,
+                        air_quality,
+                    )
+                    air_quality = dict(EMPTY_AIR_QUALITY)
 
-            health_activities = await crawl_all_health_activities(self.session, self.location_key, self.location_slug)
-            if isinstance(health_activities, Exception):
-                _LOGGER.debug(
-                    "Exception getting health activities: %s: %s",
-                    type(health_activities).__name__,
-                    health_activities,
-                )
-                health_activities = {}
+                await asyncio.sleep(0.5)
+
+                health_activities = await crawl_all_health_activities(self.session, self.location_key, self.location_slug)
+                if isinstance(health_activities, Exception):
+                    _LOGGER.debug(
+                        "Exception getting health activities: %s: %s",
+                        type(health_activities).__name__,
+                        health_activities,
+                    )
+                    health_activities = {}
+
+                # Keep whatever came back, but never overwrite good data with an
+                # empty result from a single failed page.
+                self._slow_data = {
+                    "daily_forecast": daily_forecast or self._slow_data.get("daily_forecast") or [],
+                    "hourly_forecast": hourly_forecast or self._slow_data.get("hourly_forecast") or [],
+                    "air_quality": air_quality if air_quality.get("aqi") is not None
+                    else (self._slow_data.get("air_quality") or air_quality),
+                    "health_activities": health_activities or self._slow_data.get("health_activities") or {},
+                }
+
+            daily_forecast = self._slow_data.get("daily_forecast") or []
+            hourly_forecast = self._slow_data.get("hourly_forecast") or []
+            air_quality = self._slow_data.get("air_quality") or dict(EMPTY_AIR_QUALITY)
+            health_activities = self._slow_data.get("health_activities") or {}
 
             await asyncio.sleep(0.5)
 
@@ -147,11 +204,25 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             if current_weather.get("uv_index") is None and hourly_forecast:
                 current_weather["uv_index"] = hourly_forecast[0].get("uv_index") or 0
 
-            storms = await get_storms(self.session, self.latitude, self.longitude)
+            self._apply_night_conditions(current_weather, hourly_forecast)
 
+            # Windy is a separate, undocumented source: a bad field or a changed
+            # endpoint must never take the weather data down with it.
+            storms = EMPTY_STORMS
             alerts: list[dict[str, Any]] = []
-            if self.latitude is not None and self.longitude is not None:
-                alerts = await get_alerts(self.session, self.latitude, self.longitude)
+            try:
+                storms = await get_storms(
+                    self.session, self.latitude, self.longitude
+                )
+                if self.latitude is not None and self.longitude is not None:
+                    alerts = await get_alerts(
+                        self.session, self.latitude, self.longitude
+                    )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Windy data unavailable this cycle: %s: %s",
+                    type(err).__name__, err,
+                )
 
             return {
                 "current": current_weather,

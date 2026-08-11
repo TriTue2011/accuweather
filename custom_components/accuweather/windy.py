@@ -16,9 +16,11 @@ import asyncio
 import logging
 import math
 from datetime import datetime
+from time import monotonic
 from typing import Any
 
 import aiohttp
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CARDINAL_VI,
@@ -36,6 +38,19 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=25)
+
+# Shared response cache: {url: (fetched_at, payload)}. Storm data is identical
+# for every configured location, and storms move on a scale of hours.
+_CACHE: dict[str, tuple[float, Any]] = {}
+CACHE_TTL = 240.0  # seconds
+
+# Shape returned when Windy has nothing to say, or is unreachable.
+EMPTY_STORMS: dict[str, Any] = {
+    "count": 0,
+    "nearby_count": 0,
+    "storms": [],
+    "nearest": None,
+}
 
 # Beaufort force -> lower bound in m/s. Vietnam reports cyclones on this scale,
 # so it is more useful locally than the Saffir-Simpson categories.
@@ -198,6 +213,21 @@ def predict_landfall(
     return None
 
 
+def local_time_text(raw: str | None) -> str | None:
+    """Format a Windy timestamp as local time.
+
+    Windy stamps everything in UTC; printing it unchanged reads as seven hours
+    early in Vietnam, often on the wrong day.
+    """
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return str(raw)
+    return dt_util.as_local(stamp).strftime("%H:%M %d/%m")
+
+
 def describe_landfall(
     landfall: dict[str, Any] | None,
     heading_towards: str | None = None,
@@ -205,7 +235,7 @@ def describe_landfall(
 ) -> str:
     """One line of plain Vietnamese about where the storm is going."""
     if landfall:
-        when = str(landfall.get("time") or "")[:16].replace("T", " ")
+        when = local_time_text(landfall.get("time"))
         return (
             f"Dự kiến vào khu vực {landfall['province']}"
             + (f" khoảng {when}" if when else "")
@@ -235,6 +265,26 @@ def image_url(
 async def _get_json(
     session: aiohttp.ClientSession, url: str
 ) -> Any | None:
+    """GET a Windy JSON endpoint, with a short shared cache.
+
+    Every configured location tracks the same storms, so the responses are
+    cached process-wide: adding a second or tenth location costs no extra
+    requests. Windy itself caches these for 60 seconds.
+    """
+    cached = _CACHE.get(url)
+    if cached and (monotonic() - cached[0]) < CACHE_TTL:
+        return cached[1]
+
+    payload = await _fetch_json(session, url)
+    # Cache failures too, briefly, so a broken endpoint is not retried once per
+    # location on every cycle.
+    _CACHE[url] = (monotonic(), payload)
+    return payload
+
+
+async def _fetch_json(
+    session: aiohttp.ClientSession, url: str
+) -> Any | None:
     """GET a Windy JSON endpoint. Returns None on 204 or any failure."""
     try:
         async with session.get(
@@ -257,16 +307,33 @@ async def _get_json(
     return None
 
 
+def _as_float(value: Any) -> float | None:
+    """Coerce a feed value to float, or None if it is missing or not numeric.
+
+    The feed is undocumented, and a single null coordinate used to raise a
+    TypeError deep inside the distance maths — which surfaced as every
+    AccuWeather sensor going unavailable.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _storm_summary(
     storm: dict[str, Any], latitude: float | None, longitude: float | None
 ) -> dict[str, Any]:
     """Normalise one storm: m/s -> km/h, Pascal -> hPa, plus distance."""
-    wind_ms = storm.get("windSpeed")
+    wind_ms = _as_float(storm.get("windSpeed"))
+    latitude_s = _as_float(storm.get("lat"))
+    longitude_s = _as_float(storm.get("lon"))
     summary: dict[str, Any] = {
         "id": storm.get("id"),
         "name": storm.get("name"),
-        "latitude": storm.get("lat"),
-        "longitude": storm.get("lon"),
+        "latitude": latitude_s,
+        "longitude": longitude_s,
         "strength": storm.get("strength"),
         "wind_speed_ms": wind_ms,
         "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
@@ -277,16 +344,16 @@ def _storm_summary(
     if (
         latitude is not None
         and longitude is not None
-        and storm.get("lat") is not None
-        and storm.get("lon") is not None
+        and latitude_s is not None
+        and longitude_s is not None
     ):
         summary["distance_km"] = distance_km(
-            latitude, longitude, storm["lat"], storm["lon"]
+            latitude, longitude, latitude_s, longitude_s
         )
         # Where the storm sits relative to home — not the same thing as the
         # direction it is travelling in (see _movement_from_history).
         degrees, cardinal = bearing_to(
-            latitude, longitude, storm["lat"], storm["lon"]
+            latitude, longitude, latitude_s, longitude_s
         )
         summary["direction_from_home_degrees"] = degrees
         summary["direction_from_home_en"] = cardinal
@@ -297,12 +364,12 @@ def _storm_summary(
 
 def _track_point(point: dict[str, Any]) -> dict[str, Any]:
     """Normalise one track point (wind m/s, pressure Pascal in the feed)."""
-    wind_ms = point.get("windSpeed")
-    pressure = point.get("pressure")
+    wind_ms = _as_float(point.get("windSpeed"))
+    pressure = _as_float(point.get("pressure"))
     return {
         "time": point.get("time"),
-        "latitude": point.get("lat"),
-        "longitude": point.get("lon"),
+        "latitude": _as_float(point.get("lat")),
+        "longitude": _as_float(point.get("lon")),
         "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
         "pressure_hpa": round(pressure / 100, 1) if pressure is not None else None,
     }
@@ -321,12 +388,7 @@ async def get_storms(
     `radius_km` (up to `detail_limit`); the rest stay summaries, so a quiet basin
     costs a single request.
     """
-    empty: dict[str, Any] = {
-        "count": 0,
-        "nearby_count": 0,
-        "storms": [],
-        "nearest": None,
-    }
+    empty = dict(EMPTY_STORMS)
 
     payload = await _get_json(session, WINDY_STORMS_URL)
     if not payload or not isinstance(payload, dict):
@@ -395,10 +457,17 @@ async def _add_storm_detail(
             continue
         forecasts[model] = {
             "reference_time": entry.get("reftime"),
-            "track": [
-                _track_point(p) for p in entry.get("records", [])
-                if isinstance(p, dict)
-            ],
+            # Windy sends forecast records furthest-future first. Sorting them
+            # forward matters: predict_landfall reports the first point that
+            # reaches the coast, which would otherwise be the last approach
+            # rather than the first — wrong province and a day late.
+            "track": sorted(
+                (
+                    _track_point(p) for p in entry.get("records", [])
+                    if isinstance(p, dict)
+                ),
+                key=lambda p: p.get("time") or "",
+            ),
         }
 
     storm["history"] = history
@@ -409,7 +478,7 @@ async def _add_storm_detail(
         storm["pressure_hpa"] = history[0].get("pressure_hpa")
         storm["observed_at"] = history[0].get("time")
 
-    if storm.get("latitude") is not None:
+    if storm.get("latitude") is not None and storm.get("longitude") is not None:
         province, distance = nearest_coast(storm["latitude"], storm["longitude"])
         storm["nearest_coast"] = province
         storm["distance_to_coast_km"] = distance

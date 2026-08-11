@@ -24,7 +24,13 @@ from homeassistant.components.weather import (
     Forecast,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPressure, UnitOfSpeed, UnitOfTemperature, UnitOfLength
+from homeassistant.const import (
+    UnitOfLength,
+    UnitOfPrecipitationDepth,
+    UnitOfPressure,
+    UnitOfSpeed,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -58,6 +64,7 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
     _attr_native_pressure_unit = UnitOfPressure.HPA
     _attr_native_wind_speed_unit = UnitOfSpeed.KILOMETERS_PER_HOUR
     _attr_native_visibility_unit = UnitOfLength.KILOMETERS
+    _attr_native_precipitation_unit = UnitOfPrecipitationDepth.MILLIMETERS
 
     def __init__(self, coordinator: AccuWeatherDataUpdateCoordinator) -> None:
         """Initialize the weather entity."""
@@ -322,7 +329,6 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
                 wind_bearing=hour.get("wind_bearing"),
                 cloud_coverage=hour.get("cloud_coverage"),
                 uv_index=hour.get("uv_index"),
-                native_visibility=hour.get("visibility"),
                 native_dew_point=hour.get("dew_point"),
             )
             forecasts.append(forecast)
