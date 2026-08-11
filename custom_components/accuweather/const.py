@@ -32,10 +32,6 @@ AUTOCOMPLETE_URL = f"{BASE_URL}/web-api/autocomplete"
 WINDY_NODE_URL = "https://node.windy.com"
 WINDY_STORMS_URL = f"{WINDY_NODE_URL}/tc/v2/storms"
 WINDY_ALERTS_URL = WINDY_NODE_URL + "/capalerts/{lat}/{lon}?source=hp&lang=vi&maxCount=6"
-WINDY_IMAGE_URL = WINDY_NODE_URL + "/widget/{kind}/{style}/image"
-# Interactive map, embeddable in a Home Assistant iframe card (the main
-# windy.com site sets frame-ancestors and cannot be embedded).
-WINDY_EMBED_URL = "https://embed.windy.com/embed2.html"
 
 # A storm further away than this is listed but not tracked in detail.
 STORM_NEARBY_RADIUS_KM = 2500
@@ -91,9 +87,6 @@ LANDFALL_MODEL_PRIORITY: tuple[str, ...] = (
     "jma", "ecmwf", "ukm", "noaa-at", "imd", "detected(ecmwf-hres)", "detected(gfs)",
 )
 
-# Default size of the Windy satellite/radar images.
-WINDY_IMAGE_WIDTH = 800
-WINDY_IMAGE_HEIGHT = 600
 
 # Vietnamese compass points -> (English cardinal, degrees).
 # B=Bắc(N), N=Nam(S), Đ=Đông(E), T=Tây(W) — "N" means SOUTH in Vietnamese, so

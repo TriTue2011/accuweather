@@ -30,7 +30,6 @@ from .const import (
     STORM_SLOTS,
     VIETNAM_COAST,
     WINDY_ALERTS_URL,
-    WINDY_IMAGE_URL,
     WINDY_STORMS_URL,
     WIND_DIRECTION_EN,
 )
@@ -253,19 +252,6 @@ def describe_landfall(
     return "Chưa có dấu hiệu vào đất liền Việt Nam"
 
 
-def image_url(
-    kind: str, latitude: float, longitude: float, width: int, height: int
-) -> str:
-    """Build a Windy satellite or radar image URL.
-
-    Only "webp" and "jpg" are accepted by the service; "png" is rejected.
-    """
-    style = "blue" if kind == "satellite" else "default"
-    return WINDY_IMAGE_URL.format(kind=kind, style=style) + (
-        f"?lat={latitude}&lon={longitude}&w={width}&h={height}&format=jpg"
-    )
-
-
 async def _get_json(
     session: aiohttp.ClientSession, url: str
 ) -> Any | None:
@@ -483,7 +469,10 @@ async def _add_storm_detail(
     storm.update(_movement_from_history(history))
     if history:
         storm["pressure_hpa"] = history[0].get("pressure_hpa")
+        # ISO (UTC, as the feed sends it) for templates, plus a local-time
+        # rendering for anyone reading the attribute directly.
         storm["observed_at"] = history[0].get("time")
+        storm["observed_at_text"] = local_time_text(history[0].get("time"))
 
     if storm.get("latitude") is not None and storm.get("longitude") is not None:
         province, distance = nearest_coast(storm["latitude"], storm["longitude"])

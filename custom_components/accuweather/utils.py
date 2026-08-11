@@ -323,27 +323,6 @@ def extract_numeric_value(text: str | None) -> float | None:
     return None
 
 
-def extract_wind_info(wind_text: str) -> tuple[float | None, str | None]:
-    """Extract wind speed and direction from text."""
-    if not wind_text:
-        return None, None
-    
-    # Extract speed (km/h, m/s, etc)
-    speed_match = re.search(r"([\d.,]+)\s*(km/h|m/s|mph)", wind_text)
-    speed = None
-    if speed_match:
-        try:
-            speed = float(speed_match.group(1).replace(",", "."))
-        except ValueError:
-            pass
-    
-    # Extract direction
-    direction_match = re.search(r"([NSEW]{1,3}|[BTĐN]{1,3})", wind_text)
-    direction = direction_match.group(1) if direction_match else None
-    
-    return speed, direction
-
-
 def convert_temp_to_numeric(temp_text: str) -> float | None:
     """Convert temperature text to numeric value."""
     if not temp_text:

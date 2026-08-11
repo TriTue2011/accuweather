@@ -665,6 +665,7 @@ class AccuWeatherStormSensor(
             "classification": storm.get("classification"),
             "pressure_hpa": storm.get("pressure_hpa"),
             "observed_at": storm.get("observed_at"),
+            "observed_at_text": storm.get("observed_at_text"),
             "movement": storm.get("movement_text"),
             "movement_direction": storm.get("movement_direction"),
             "movement_speed_kmh": storm.get("movement_speed_kmh"),
