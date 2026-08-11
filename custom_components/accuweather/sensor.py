@@ -513,10 +513,13 @@ class AccuWeatherStormSummarySensor(
         )
 
     @property
+    def _data(self) -> dict[str, Any]:
+        """Coordinator data, or an empty mapping before the first update."""
+        return self.coordinator.data or {}
+
+    @property
     def _storms(self) -> dict[str, Any]:
-        if not self.coordinator.data:
-            return {}
-        return self.coordinator.data.get("storms") or {}
+        return self._data.get("storms") or {}
 
     @property
     def native_value(self) -> Any:
@@ -540,7 +543,7 @@ class AccuWeatherStormSummarySensor(
                 return NO_STORM
             return nearest.get("landfall_text") or "Chưa có dấu hiệu vào đất liền"
         if key == "weather_alerts":
-            return len(self.coordinator.data.get("alerts") or [])
+            return len(self._data.get("alerts") or [])
         return None
 
     @property
@@ -549,9 +552,12 @@ class AccuWeatherStormSummarySensor(
         key = self.entity_description.key
         storms = self._storms
         attrs: dict[str, Any] = {"location_key": self.coordinator.location_key}
+        if storms.get("stale"):
+            # Windy was unreachable; these are the last figures that arrived.
+            attrs["stale"] = True
 
         if key == "weather_alerts":
-            attrs["alerts"] = self.coordinator.data.get("alerts") or []
+            attrs["alerts"] = self._data.get("alerts") or []
             return attrs
 
         if key in ("storm_count", "storm_nearby_count"):

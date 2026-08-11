@@ -51,6 +51,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         # that decides when.
         self._slow_data: dict[str, Any] = {}
         self._cycle = 0
+        # Last storm and alert data that actually came back, kept so a Windy
+        # outage does not read as "the storm is gone".
+        self._storms_cache: dict[str, Any] = {}
+        self._alerts_cache: list[dict[str, Any]] = []
 
         super().__init__(
             hass,
@@ -208,8 +212,8 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Windy is a separate, undocumented source: a bad field or a changed
             # endpoint must never take the weather data down with it.
-            storms = EMPTY_STORMS
-            alerts: list[dict[str, Any]] = []
+            storms = dict(EMPTY_STORMS)
+            alerts: list[dict[str, Any]] = self._alerts_cache
             try:
                 storms = await get_storms(
                     self.session, self.latitude, self.longitude
@@ -218,10 +222,24 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
                     alerts = await get_alerts(
                         self.session, self.latitude, self.longitude
                     )
+                    self._alerts_cache = alerts
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
                     "Windy data unavailable this cycle: %s: %s",
                     type(err).__name__, err,
+                )
+
+            # If Windy could not be reached, keep showing the last known storms
+            # rather than announcing "no storms" — during an actual typhoon that
+            # would be the worst possible time to go quiet.
+            if storms.get("available"):
+                self._storms_cache = storms
+            elif self._storms_cache.get("count"):
+                storms = dict(self._storms_cache)
+                storms["stale"] = True
+                _LOGGER.debug(
+                    "Keeping last known storm data (%d storms) while Windy is "
+                    "unreachable", storms.get("count", 0),
                 )
 
             return {

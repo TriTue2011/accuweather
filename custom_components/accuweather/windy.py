@@ -44,12 +44,16 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=25)
 _CACHE: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = 240.0  # seconds
 
-# Shape returned when Windy has nothing to say, or is unreachable.
+# Shape returned when Windy has nothing to say, or is unreachable. "available"
+# separates the two: a quiet basin is a real answer, an unreachable endpoint is
+# not, and reporting "no storms" for the latter would be a dangerous kind of
+# wrong.
 EMPTY_STORMS: dict[str, Any] = {
     "count": 0,
     "nearby_count": 0,
     "storms": [],
     "nearest": None,
+    "available": False,
 }
 
 # Beaufort force -> lower bound in m/s. Vietnam reports cyclones on this scale,
@@ -400,6 +404,8 @@ async def get_storms(
         if isinstance(storm, dict)
     ]
     if not storms:
+        # A real answer: the basin is quiet.
+        empty["available"] = True
         return empty
 
     if latitude is not None and longitude is not None:
@@ -433,6 +439,7 @@ async def get_storms(
         "storms": storms,
         "nearest": nearest,
         "uncertainty_circles_m": payload.get("defaultCircles"),
+        "available": True,
     }
 
 

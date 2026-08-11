@@ -21,6 +21,8 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 - **Hướng di chuyển** viết bằng chữ, ví dụ „Di chuyển hướng Tây Bắc, 21 km/h", suy ra từ hai điểm quỹ đạo gần nhất
 - **Dự kiến vào đất liền**: tỉnh ven biển mà đường bão hướng tới và thời điểm, ví dụ „Dự kiến vào khu vực Quảng Bình khoảng 2026-08-13 12:00 (theo JMA)". Đường đi lấy theo thứ tự tin cậy JMA → ECMWF → các mô hình khác, và quỹ đạo quá khứ lẫn dự báo được lưu trong thuộc tính để vẽ lên bản đồ
 - Cảnh báo thời tiết chính thức (CAP) cho vị trí đã chọn
+- Khi không có bão nào: các sensor báo „Không có bão", `Storm Count` = 0. Khi bão tan hoặc bão mới xuất hiện gần hơn, các slot tự xếp lại theo khoảng cách — `Storm 1` luôn là cơn gần bạn nhất.
+- Khi không gọi được Windy: **giữ nguyên số liệu bão lần trước** và đánh dấu thuộc tính `stale: true`, thay vì báo „Không có bão" — đang bão mà sensor tự nhiên nói hết bão là kiểu sai tệ nhất.
 
 **Khác**
 
