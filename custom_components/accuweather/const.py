@@ -191,6 +191,8 @@ CONDITION_MAP = {
     "mostly cloudy w/ showers": "rainy", 
     "partly sunny w/ showers": "rainy",
     "t-storms": "lightning-rainy",
+    # The English pages spell it out in full as well as abbreviated.
+    "thunderstorm": "lightning-rainy",
     "mostly cloudy w/ t-storms": "lightning-rainy",
     "partly sunny w/ t-storms": "lightning-rainy",
     "rain": "rainy",

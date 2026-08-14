@@ -260,7 +260,10 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
                 native_templow=day.get("native_templow"),
                 native_apparent_temperature=day.get("realfeel"),
                 precipitation_probability=day.get("precipitation_probability"),
-                native_precipitation=day.get("precipitation"),
+                native_precipitation=(
+                    day.get("precipitation")
+                    or self._precipitation_from_hours(forecast_date)
+                ),
                 humidity=day.get("humidity"),
                 native_wind_speed=day.get("wind_speed"),
                 native_wind_gust_speed=day.get("wind_gust_speed"),
@@ -271,6 +274,26 @@ class AccuWeatherEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator], Wea
             forecasts.append(forecast)
 
         return forecasts
+
+    def _precipitation_from_hours(self, forecast_date: datetime) -> float | None:
+        """Total rainfall for one day, summed from the hourly forecast.
+
+        AccuWeather's daily page publishes hours of rain but never millimetres,
+        so the only source for an amount is the hourly pages — which are already
+        loaded. Only the days those pages cover get a figure; the rest stay
+        empty rather than being guessed at.
+        """
+        hourly = (self.coordinator.data or {}).get("hourly_forecast") or []
+        total = None
+        for hour in hourly:
+            amount = hour.get("precipitation")
+            timestamp = hour.get("timestamp")
+            if amount is None or timestamp is None:
+                continue
+            stamp = datetime.fromtimestamp(timestamp, tz=forecast_date.tzinfo)
+            if stamp.date() == forecast_date.date():
+                total = (total or 0.0) + amount
+        return round(total, 1) if total is not None else None
 
     @staticmethod
     def _daily_forecast_date(

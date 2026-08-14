@@ -325,17 +325,16 @@ def map_condition_to_ha(condition: str | None) -> str:
         return "unknown"
     
     condition_lower = condition.lower().strip()
-    
-    # Try Vietnamese mapping first
-    for vi_condition, ha_condition in CONDITION_MAP_VI.items():
-        if vi_condition in condition_lower:
-            return ha_condition
-    
-    # Try English mapping
-    for en_condition, ha_condition in CONDITION_MAP.items():
-        if en_condition in condition_lower:
-            return ha_condition
-    
+
+    # Longest phrase wins. Scanning in table order let "mưa" match before
+    # "mưa dông", so every thunderstorm was reported as ordinary rain — and
+    # "mưa to" (pouring) and "mưa tuyết" (sleet) lost the same way.
+    for mapping in (CONDITION_MAP_VI, CONDITION_MAP):
+        for phrase in sorted(mapping, key=len, reverse=True):
+            if phrase in condition_lower:
+                return mapping[phrase]
+
+
     # Default fallback
     if "mưa" in condition_lower or "rain" in condition_lower:
         return "rainy"
