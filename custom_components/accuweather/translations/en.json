@@ -35,10 +35,12 @@
         "title": "Configure Update Interval",
         "description": "Choose the time between weather data updates from AccuWeather. Shorter time = faster updates but more resource usage.",
         "data": {
-          "update_interval": "Update Interval (seconds)"
+          "update_interval": "Update Interval (seconds)",
+          "landfall_country": "Country watched for landfall"
         },
         "data_description": {
-          "update_interval": "From 300 to 3600 seconds (default: 600 seconds)"
+          "update_interval": "From 300 to 3600 seconds (default: 600 seconds)",
+          "landfall_country": "The \"Nearest storm landfall\" sensor only speaks up when a storm comes ashore in this country; landfalls elsewhere still show on the Storm 1/2/3 sensors. Defaults to the country of the location you just picked."
         }
       }
     },
@@ -60,11 +62,13 @@
         "description": "Change settings for AccuWeather integration. You can adjust the weather data update frequency.",
         "data": {
           "update_interval": "Update Interval (seconds)",
-          "sensor_language": "Sensor language"
+          "sensor_language": "Sensor language",
+          "landfall_country": "Country watched for landfall"
         },
         "data_description": {
           "update_interval": "Time between data updates (300-3600 seconds)",
-          "sensor_language": "Language of the sensor names and of what they report — conditions, air quality, health indices and storm bulletins — independent of the interface language. Entity IDs stay as they are."
+          "sensor_language": "Language of the sensor names and of what they report — conditions, air quality, health indices and storm bulletins — independent of the interface language. Entity IDs stay as they are.",
+          "landfall_country": "The \"Nearest storm landfall\" sensor only speaks up when a storm comes ashore in this country; landfalls elsewhere still show on the Storm 1/2/3 sensors."
         }
       }
     }

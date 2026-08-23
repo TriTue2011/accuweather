@@ -35,10 +35,12 @@
         "title": "Cấu hình Thời gian Cập nhật",
         "description": "Chọn khoảng thời gian giữa các lần cập nhật dữ liệu thời tiết từ AccuWeather. Thời gian ngắn = cập nhật nhanh nhưng tốn tài nguyên.",
         "data": {
-          "update_interval": "Khoảng thời gian cập nhật (giây)"
+          "update_interval": "Khoảng thời gian cập nhật (giây)",
+          "landfall_country": "Quốc gia theo dõi bão đổ bộ"
         },
         "data_description": {
-          "update_interval": "Từ 300 đến 3600 giây (mặc định: 600 giây)"
+          "update_interval": "Từ 300 đến 3600 giây (mặc định: 600 giây)",
+          "landfall_country": "Cảm biến „Dự báo đổ bộ bão gần nhất\" chỉ lên tiếng khi có bão vào bờ nước này; bão đổ bộ nơi khác vẫn hiện đủ ở các cảm biến Storm 1/2/3. Mặc định lấy theo quốc gia của địa điểm vừa chọn."
         }
       }
     },
@@ -60,11 +62,13 @@
         "description": "Thay đổi cài đặt cho tích hợp AccuWeather. Bạn có thể điều chỉnh tần suất cập nhật dữ liệu thời tiết.",
         "data": {
           "update_interval": "Khoảng thời gian cập nhật (giây)",
-          "sensor_language": "Ngôn ngữ sensor"
+          "sensor_language": "Ngôn ngữ sensor",
+          "landfall_country": "Quốc gia theo dõi bão đổ bộ"
         },
         "data_description": {
           "update_interval": "Thời gian giữa các lần cập nhật dữ liệu (300-3600 giây)",
-          "sensor_language": "Ngôn ngữ của tên sensor và của nội dung sensor báo về — hiện tượng thời tiết, chất lượng không khí, chỉ số sức khoẻ và bản tin bão — không phụ thuộc ngôn ngữ giao diện. Entity ID giữ nguyên."
+          "sensor_language": "Ngôn ngữ của tên sensor và của nội dung sensor báo về — hiện tượng thời tiết, chất lượng không khí, chỉ số sức khoẻ và bản tin bão — không phụ thuộc ngôn ngữ giao diện. Entity ID giữ nguyên.",
+          "landfall_country": "Cảm biến „Dự báo đổ bộ bão gần nhất\" chỉ lên tiếng khi có bão vào bờ nước này; bão đổ bộ nơi khác vẫn hiện đủ ở các cảm biến Storm 1/2/3."
         }
       }
     }

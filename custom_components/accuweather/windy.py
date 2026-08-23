@@ -27,12 +27,14 @@ from .const import (
     CARDINAL_NAMES,
     COAST_LOOKUP_MAX_KM,
     COUNTRY_NAME_EN,
+    DEFAULT_LANDFALL_COUNTRY,
     LANDFALL_MODEL_PRIORITY,
     LANDFALL_OBSERVED_KM,
     LANDFALL_RECENT_HOURS,
     LANDFALL_THRESHOLD_KM,
     STORM_NEARBY_RADIUS_KM,
     STORM_SLOTS,
+    VIETNAM,
     VIETNAM_COAST,
     WINDY_ALERTS_URL,
     WINDY_STORMS_URL,
@@ -257,20 +259,101 @@ def nearest_coast(
     return None, None
 
 
+# The Vietnamese names out of VIETNAM_COAST. Every other coastal point is
+# already named after its country; these are the ones that are not.
+_VIETNAM_PLACES = frozenset(name for name, _, _ in VIETNAM_COAST)
+
+
+def _country_of(place: str | None) -> str | None:
+    """Which country a coastal reference point belongs to."""
+    if place is None:
+        return None
+    return VIETNAM if place in _VIETNAM_PLACES else place
+
+
+# Margin added to each country's own bounding box. A track point further
+# outside than this cannot be within the landfall threshold of that coast, and
+# 2 degrees is about 220 km at these latitudes.
+_BOX_MARGIN_DEGREES = 2.0
+
+_COUNTRY_COAST: dict[str, list[tuple[str, float, float]]] = {}
+_COUNTRY_BOX: dict[str, tuple[float, float, float, float]] = {}
+
+
+def _by_country() -> dict[str, list[tuple[str, float, float]]]:
+    """Coastal points grouped by country, with their boxes, built on first use."""
+    if not _COUNTRY_COAST:
+        for name, lat, lon in (*VIETNAM_COAST, *COASTAL_POINTS):
+            _COUNTRY_COAST.setdefault(_country_of(name), []).append((name, lat, lon))
+        for country, points in _COUNTRY_COAST.items():
+            lats = [lat for _, lat, _ in points]
+            lons = [lon for _, _, lon in points]
+            _COUNTRY_BOX[country] = (
+                min(lats) - _BOX_MARGIN_DEGREES,
+                max(lats) + _BOX_MARGIN_DEGREES,
+                min(lons) - _BOX_MARGIN_DEGREES,
+                max(lons) + _BOX_MARGIN_DEGREES,
+            )
+    return _COUNTRY_COAST
+
+
+def landfall_countries() -> tuple[str, ...]:
+    """Every country whose coast a landfall can be reported for, sorted."""
+    return tuple(sorted(_by_country()))
+
+
+def nearest_coast_in(
+    country: str, latitude: float, longitude: float
+) -> tuple[str | None, float | None]:
+    """Nearest point on one country's coast, and its distance in km.
+
+    `nearest_coast` answers with whichever land is closest, which is China or
+    the Philippines for plenty of points that are also within reach of Vietnam.
+    This one only ever answers with the country asked for, so a typhoon
+    crossing Luzon on its way to Quảng Trị still has a Vietnamese landfall to
+    report. Vietnam comes back named by province, everywhere else by country.
+    """
+    points = _by_country().get(country)
+    if not points:
+        return None, None
+
+    low_lat, high_lat, low_lon, high_lon = _COUNTRY_BOX[country]
+    if not (low_lat <= latitude <= high_lat and low_lon <= longitude <= high_lon):
+        return None, None
+
+    name, best = None, None
+    for candidate, lat, lon in points:
+        measured = distance_km(latitude, longitude, lat, lon)
+        if best is None or measured < best:
+            name, best = candidate, measured
+    return name, best
+
+
 def _coast_crossing(
     track: list[dict[str, Any]],
     threshold_km: float,
     language: str = FALLBACK_LANGUAGE,
+    country: str | None = None,
 ) -> dict[str, Any] | None:
-    """First point of a track that comes within `threshold_km` of the coast."""
+    """First point of a track that comes within `threshold_km` of the coast.
+
+    `country` narrows the search to one country's coast; without it the nearest
+    land wins, whichever country that turns out to be.
+    """
     for point in track:
         lat, lon = point.get("latitude"), point.get("longitude")
         if lat is None or lon is None:
             continue
-        province, distance = nearest_coast(lat, lon)
+        province, distance = (
+            nearest_coast_in(country, lat, lon) if country
+            else nearest_coast(lat, lon)
+        )
         if distance is not None and distance <= threshold_km:
             return {
                 "province": place_name(province, language),
+                # Kept untranslated: this is the value the landfall country
+                # option is set to, and it is compared against it.
+                "country": _country_of(province),
                 "distance_km": distance,
                 "time": point.get("time"),
                 "latitude": lat,
@@ -291,8 +374,9 @@ def predict_landfall(
     history: list[dict[str, Any]] | None = None,
     threshold_km: float = LANDFALL_THRESHOLD_KM,
     language: str = FALLBACK_LANGUAGE,
+    country: str | None = None,
 ) -> dict[str, Any] | None:
-    """Work out where a storm's track meets the Vietnamese coast, past or future.
+    """Work out where a storm's track meets the coast, past or future.
 
     The observed track is checked first, oldest point first: a storm that has
     already come ashore must be reported as having done so, not as still
@@ -302,9 +386,13 @@ def predict_landfall(
     first point reaching the coast is reported.
 
     The coast in question is whichever land is nearest — Vietnam by province,
-    everywhere else in the basin by country. Either way this is an
-    approximation from track points and coastal reference points: it names the
-    stretch of coast involved, not an official bulletin.
+    everywhere else in the basin by country. `country` narrows it to one
+    country's coast: the same track then answers "where does this storm meet
+    Thailand", which is a different question from "where does it first meet
+    land" for every storm that crosses somewhere else on the way in.
+
+    Either way this is an approximation from track points and coastal reference
+    points: it names the stretch of coast involved, not an official bulletin.
     """
     if history:
         # Newest point first, so this finds the LAST time the storm was against
@@ -313,7 +401,7 @@ def predict_landfall(
         observed = sorted(
             history, key=lambda p: p.get("time") or "", reverse=True
         )
-        hit = _coast_crossing(observed, LANDFALL_OBSERVED_KM, language)
+        hit = _coast_crossing(observed, LANDFALL_OBSERVED_KM, language, country)
         # An old crossing is history, not weather. Past that age the storm has
         # moved on and its forecast track is the thing worth reporting.
         if hit and (hours := hours_until(hit.get("time"))) is not None:
@@ -336,7 +424,7 @@ def predict_landfall(
             for point in (forecasts[model].get("track") or [])
             if (hours := hours_until(point.get("time"))) is None or hours > 0
         ]
-        if hit := _coast_crossing(track, threshold_km, language):
+        if hit := _coast_crossing(track, threshold_km, language, country):
             hit["model"] = model
             hit["status"] = "forecast"
             return hit
@@ -358,6 +446,13 @@ def local_time_text(raw: str | None) -> str | None:
     return dt_util.as_local(stamp).strftime("%H:%M %d/%m")
 
 
+def storm_headline(storm: dict[str, Any]) -> str:
+    """What the storm is, plus its name: Bão Kajiki."""
+    name = storm.get("name") or "?"
+    classification = storm.get("classification")
+    return f"{classification} {name}" if classification else name
+
+
 def describe_storm(storm: dict[str, Any], language: str = FALLBACK_LANGUAGE) -> str:
     """One bulletin line for a single storm: what, where, which way, going in.
 
@@ -367,9 +462,7 @@ def describe_storm(storm: dict[str, Any], language: str = FALLBACK_LANGUAGE) -> 
     with distances and forecast model, stays in the `landfall` attribute, and
     the state has a 255 character ceiling to respect.
     """
-    name = storm.get("name") or "?"
-    classification = storm.get("classification")
-    headline = f"{classification} {name}" if classification else name
+    headline = storm_headline(storm)
     if beaufort := storm.get("beaufort"):
         headline = text(
             language, "storm_force", headline=headline, beaufort=beaufort
@@ -433,6 +526,7 @@ def describe_landfall(
     distance_to_coast: float | None = None,
     from_home: bool = False,
     language: str = FALLBACK_LANGUAGE,
+    storm_name: str | None = None,
 ) -> str:
     """One plain line about where the storm is going.
 
@@ -443,6 +537,10 @@ def describe_landfall(
     location — the figure that says whether the storm is coming for you, rather
     than how far it still has to travel. It belongs on the "nearest storm"
     sensor and would only be noise repeated on every individual storm.
+
+    `storm_name` opens the line with which storm this is. The per-storm sensors
+    already say that in their own state, but the landfall sensor is read on its
+    own, where an unnamed forecast leaves you guessing.
     """
     if not landfall:
         if heading_towards and distance_to_coast is not None:
@@ -501,9 +599,11 @@ def describe_landfall(
         )
 
     line = ", ".join(parts)
-    if past:
-        return line
-    return line + text(language, "landfall_model", model=landfall["model"].upper())
+    if not past:
+        line += text(language, "landfall_model", model=landfall["model"].upper())
+    if storm_name:
+        line = text(language, "landfall_named", storm=storm_name, line=line)
+    return line
 
 
 async def _get_json(
@@ -631,12 +731,16 @@ async def get_storms(
     radius_km: float = STORM_NEARBY_RADIUS_KM,
     detail_limit: int = STORM_SLOTS,
     language: str = FALLBACK_LANGUAGE,
+    country: str = DEFAULT_LANDFALL_COUNTRY,
 ) -> dict[str, Any]:
     """Fetch active tropical cyclones, closest first.
 
     Tracks, movement and landfall estimates are added for the storms inside
     `radius_km` (up to `detail_limit`); the rest stay summaries, so a quiet basin
     costs a single request.
+
+    `country` is the coast the landfall sensor watches, so every detailed storm
+    also gets an estimate of where it meets that country in particular.
     """
     empty = dict(EMPTY_STORMS)
 
@@ -669,7 +773,9 @@ async def get_storms(
     for storm in storms:
         if storm.get("id") not in detailed_ids:
             continue
-        await _add_storm_detail(session, storm, latitude, longitude, language)
+        await _add_storm_detail(
+            session, storm, latitude, longitude, language, country
+        )
 
     nearest = storms[0] if storms else None
 
@@ -714,17 +820,57 @@ def _central_pressure(
     return None
 
 
+def _measure_landfall(
+    landfall: dict[str, Any] | None,
+    storm: dict[str, Any],
+    latitude: float | None,
+    longitude: float | None,
+) -> None:
+    """Add the distances and times around a landfall estimate, in place."""
+    if not landfall:
+        return
+
+    # How much further the storm still has to travel to get there, and how long
+    # that leaves. Both are meaningless once it has already landed.
+    landfall["hours_away"] = hours_until(landfall.get("time"))
+    if (
+        landfall.get("status") == "forecast"
+        and storm.get("latitude") is not None
+        and storm.get("longitude") is not None
+        and landfall.get("latitude") is not None
+    ):
+        landfall["distance_from_storm_km"] = distance_km(
+            storm["latitude"],
+            storm["longitude"],
+            landfall["latitude"],
+            landfall["longitude"],
+        )
+    # A different question from the one above: not how far the storm still has
+    # to go, but how close it will come ashore to where you live.
+    if (
+        latitude is not None
+        and longitude is not None
+        and landfall.get("latitude") is not None
+    ):
+        landfall["distance_from_home_km"] = distance_km(
+            latitude, longitude, landfall["latitude"], landfall["longitude"]
+        )
+    landfall["time_text"] = local_time_text(landfall.get("time"))
+
+
 async def _add_storm_detail(
     session: aiohttp.ClientSession,
     storm: dict[str, Any],
     latitude: float | None = None,
     longitude: float | None = None,
     language: str = FALLBACK_LANGUAGE,
+    country: str = DEFAULT_LANDFALL_COUNTRY,
 ) -> None:
-    """Attach track, movement and landfall estimate to a storm, in place.
+    """Attach track, movement and landfall estimates to a storm, in place.
 
     `latitude`/`longitude` are the configured location, used to work out how far
-    the landfall point is from it.
+    the landfall point is from it. `country` is the coast being watched, which
+    gets an estimate of its own.
     """
     detail = await _get_json(session, f"{WINDY_STORMS_URL}/{storm['id']}")
     if not isinstance(detail, dict):
@@ -773,33 +919,20 @@ async def _add_storm_detail(
         storm["distance_to_coast_km"] = distance
 
     landfall = predict_landfall(forecasts, history, language=language)
-    if landfall:
-        # How much further the storm still has to travel to get there, and how
-        # long that leaves. Both are meaningless once it has already landed.
-        landfall["hours_away"] = hours_until(landfall.get("time"))
-        if (
-            landfall.get("status") == "forecast"
-            and storm.get("latitude") is not None
-            and storm.get("longitude") is not None
-            and landfall.get("latitude") is not None
-        ):
-            landfall["distance_from_storm_km"] = distance_km(
-                storm["latitude"],
-                storm["longitude"],
-                landfall["latitude"],
-                landfall["longitude"],
-            )
-        # A different question from the one above: not how far the storm still
-        # has to go, but how close it will come ashore to where you live.
-        if (
-            latitude is not None
-            and longitude is not None
-            and landfall.get("latitude") is not None
-        ):
-            landfall["distance_from_home_km"] = distance_km(
-                latitude, longitude, landfall["latitude"], landfall["longitude"]
-            )
-        landfall["time_text"] = local_time_text(landfall.get("time"))
+    _measure_landfall(landfall, storm, latitude, longitude)
+
+    # Where the storm meets the country being watched, which is not the same
+    # question as where it first meets land: a typhoon that crosses Luzon has
+    # made landfall long before it reaches Quảng Trị, and the Philippine
+    # crossing is the one the estimate above reports.
+    if landfall and landfall.get("country") == country:
+        # The nearest land already is that country, so it is the same crossing.
+        watched = landfall
+    else:
+        watched = predict_landfall(
+            forecasts, history, language=language, country=country
+        )
+        _measure_landfall(watched, storm, latitude, longitude)
 
     storm["landfall"] = landfall
     storm["landfall_text"] = describe_landfall(
@@ -808,15 +941,21 @@ async def _add_storm_detail(
         storm.get("distance_to_coast_km"),
         language=language,
     )
-    # Same sentence with the distance from the configured location added, for
-    # the "nearest storm" sensor. Kept as a second string because the nearest
-    # storm and storm slot 1 are the same record.
-    storm["landfall_text_from_home"] = describe_landfall(
-        landfall,
-        storm.get("nearest_coast"),
-        storm.get("distance_to_coast_km"),
-        from_home=True,
-        language=language,
+
+    storm["landfall_watched"] = watched
+    # The landfall sensor is read on its own, so this line carries the name of
+    # the storm and how far from you it comes ashore. Written only when there
+    # is a landfall on the watched coast: with none, that sensor says so in its
+    # own words rather than describing an absent one.
+    storm["landfall_watched_text"] = (
+        describe_landfall(
+            watched,
+            from_home=True,
+            language=language,
+            storm_name=storm_headline(storm),
+        )
+        if watched
+        else None
     )
     # Built last: it quotes the landfall estimate worked out just above.
     storm["summary_text"] = describe_storm(storm, language)

@@ -36,6 +36,7 @@ from .const import (
 from .coordinator import AccuWeatherDataUpdateCoordinator
 from .device import get_device_info
 from .i18n import text
+from .windy import place_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -379,18 +380,38 @@ async def async_name_overrides(
     return SensorNames(display=display, object_id=object_id)
 
 
-def landfall_attributes(storm: dict[str, Any]) -> dict[str, Any]:
-    """Flatten the landfall estimate into attributes a card can read directly.
+def watched_landfall(storms: dict[str, Any]) -> dict[str, Any] | None:
+    """The nearest storm whose track reaches the coast being watched.
 
-    The nested `landfall` mapping stays as it is for anyone already using it;
-    these are the same figures one level up, where a template can reach them
-    without an existence check on every step.
+    Which coast that is comes from the landfall country chosen when the entry
+    was set up. The list is already sorted by distance from the configured
+    location, so the first match is the nearest such storm. Only the storms
+    close enough to have their track fetched — STORM_SLOTS of them — carry a
+    landfall estimate at all, which is the practical limit on how far ahead
+    this can look.
     """
-    landfall = storm.get("landfall") or {}
+    for storm in storms.get("storms") or ():
+        if storm.get("landfall_watched"):
+            return storm
+    return None
+
+
+def landfall_attributes(
+    landfall: dict[str, Any] | None, language: str
+) -> dict[str, Any]:
+    """Flatten one landfall estimate into attributes a card can read directly.
+
+    The nested mapping stays as it is for anyone already using it; these are the
+    same figures one level up, where a template can reach them without an
+    existence check on every step.
+    """
+    landfall = landfall or {}
     return {
         # "past" once the storm has come ashore, "forecast" while it is still
         # heading in, absent when nothing on its track reaches the coast.
         "landfall_status": landfall.get("status"),
+        # Which country the storm comes ashore in, in the sensor language.
+        "landfall_country": place_name(landfall.get("country"), language),
         "landfall_province": landfall.get("province"),
         "landfall_time": landfall.get("time"),
         "landfall_time_text": landfall.get("time_text"),
@@ -706,12 +727,17 @@ class AccuWeatherStormSummarySensor(
         if key == "storm_landfall":
             if not nearest:
                 return text(language, "no_storm")
-            # The nearest storm is the one picked by distance from the
-            # configured location, so this is where that distance belongs.
-            return (
-                nearest.get("landfall_text_from_home")
-                or nearest.get("landfall_text")
-                or text(language, "landfall_unknown")
+            # Only a landfall on the coast being watched is reported here: a
+            # storm heading elsewhere is somebody else's warning, and saying
+            # nothing is the useful answer. The line names the storm and
+            # carries the distance from the configured location, which is what
+            # makes it readable on its own.
+            inbound = watched_landfall(storms)
+            country = place_name(self.coordinator.landfall_country, language)
+            if not inbound:
+                return text(language, "landfall_none_country", country=country)
+            return inbound.get("landfall_watched_text") or text(
+                language, "landfall_unknown"
             )
         if key == "weather_alerts":
             return len(self._data.get("alerts") or [])
@@ -756,24 +782,40 @@ class AccuWeatherStormSummarySensor(
             ]
             return attrs
 
-        nearest = storms.get("nearest") or {}
-        if nearest:
+        if key == "storm_landfall":
+            # The state only speaks about a landfall on the watched coast, so
+            # this has to be the storm that state is about — not necessarily
+            # the nearest one — and that crossing rather than wherever the
+            # storm first met land.
+            storm = watched_landfall(storms) or {}
+            landfall = storm.get("landfall_watched")
+            # Both always present, so a card can hide the row without reading
+            # the sentence, and can name the coast being watched.
+            attrs["watched_country"] = place_name(
+                self.coordinator.landfall_country, self.coordinator.language
+            )
+            attrs["landfall_in_country"] = bool(landfall)
+        else:
+            storm = storms.get("nearest") or {}
+            landfall = storm.get("landfall")
+
+        if storm:
             attrs.update({
-                "name": nearest.get("name"),
-                "latitude": nearest.get("latitude"),
-                "longitude": nearest.get("longitude"),
-                "distance_km": nearest.get("distance_km"),
-                "direction_from_home": nearest.get("direction_from_home"),
-                "wind_speed_kmh": nearest.get("wind_speed_kmh"),
-                "beaufort": nearest.get("beaufort"),
-                "classification": nearest.get("classification"),
-                "movement_direction": nearest.get("movement_direction"),
-                "movement_speed_kmh": nearest.get("movement_speed_kmh"),
-                "nearest_coast": nearest.get("nearest_coast"),
-                "distance_to_coast_km": nearest.get("distance_to_coast_km"),
-                "landfall": nearest.get("landfall"),
+                "name": storm.get("name"),
+                "latitude": storm.get("latitude"),
+                "longitude": storm.get("longitude"),
+                "distance_km": storm.get("distance_km"),
+                "direction_from_home": storm.get("direction_from_home"),
+                "wind_speed_kmh": storm.get("wind_speed_kmh"),
+                "beaufort": storm.get("beaufort"),
+                "classification": storm.get("classification"),
+                "movement_direction": storm.get("movement_direction"),
+                "movement_speed_kmh": storm.get("movement_speed_kmh"),
+                "nearest_coast": storm.get("nearest_coast"),
+                "distance_to_coast_km": storm.get("distance_to_coast_km"),
+                "landfall": landfall,
             })
-            attrs.update(landfall_attributes(nearest))
+            attrs.update(landfall_attributes(landfall, self.coordinator.language))
         return attrs
 
 
@@ -872,7 +914,7 @@ class AccuWeatherStormSensor(
             "nearest_coast": storm.get("nearest_coast"),
             "distance_to_coast_km": storm.get("distance_to_coast_km"),
             "forecast_models": storm.get("forecast_models"),
-            **landfall_attributes(storm),
+            **landfall_attributes(storm.get("landfall"), self.coordinator.language),
         }
 
         # Trim the tracks: full history can run to 56 points per storm, and

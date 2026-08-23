@@ -9,8 +9,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .const import (
+    CONF_LANDFALL_COUNTRY,
     CONF_SENSOR_LANGUAGE,
     CONF_UPDATE_INTERVAL,
+    DEFAULT_LANDFALL_COUNTRY,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     SENSOR_LANGUAGE_AUTO,
@@ -41,6 +43,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     _LOGGER.debug("AccuWeather language resolved to %s", language)
 
+    # Which coast the landfall sensor watches. Entries created before this
+    # option existed fall back to Vietnam, which is what they were doing.
+    landfall_country = entry.data.get(
+        CONF_LANDFALL_COUNTRY, DEFAULT_LANDFALL_COUNTRY
+    )
+
     # A dedicated session keeps AccuWeather's cookies (unit, language) out of
     # Home Assistant's shared session. Home Assistant closes it on shutdown.
     session = async_create_clientsession(
@@ -57,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = AccuWeatherDataUpdateCoordinator(
         hass, session, location_key, location_name, entry, update_interval,
-        language,
+        language, landfall_country,
     )
 
     if coordinator.fetcher.using_impersonation:

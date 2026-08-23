@@ -12,7 +12,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, SLOW_REFRESH_EVERY
+from .const import (
+    DEFAULT_LANDFALL_COUNTRY,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+    SLOW_REFRESH_EVERY,
+)
 from .i18n import FALLBACK_LANGUAGE, text
 from .utils import (
     EMPTY_AIR_QUALITY,
@@ -40,6 +45,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         config_entry: ConfigEntry,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
         language: str = FALLBACK_LANGUAGE,
+        landfall_country: str = DEFAULT_LANDFALL_COUNTRY,
     ) -> None:
         """Initialize."""
         self.location_key = location_key
@@ -50,6 +56,9 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         # write in. Already resolved: "auto" was turned into a real language
         # when the entry was set up.
         self.language = language
+        # The coast the landfall sensor watches. Storms are tracked wherever
+        # they are; this only decides which landfall is worth a sensor state.
+        self.landfall_country = landfall_country
         # AccuWeather needs a browser TLS fingerprint to get past its bot
         # protection; Windy is happy with the plain Home Assistant session.
         self.fetcher = HtmlFetcher(session)
@@ -243,7 +252,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             try:
                 storms = await get_storms(
                     self.session, self.latitude, self.longitude,
-                    language=self.language,
+                    language=self.language, country=self.landfall_country,
                 )
                 if self.latitude is not None and self.longitude is not None:
                     alerts = await get_alerts(

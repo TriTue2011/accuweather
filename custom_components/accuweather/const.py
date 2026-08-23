@@ -5,7 +5,7 @@ DOMAIN = "accuweather"
 # Shown on the device page. Keep VERSION in step with manifest.json — the device
 # page used to advertise 2026.4.22 while the manifest had moved on.
 MANUFACTURER = "TriTue2011"
-VERSION = "2026.8.13"
+VERSION = "2026.8.23"
 
 # Config flow
 CONF_LOCATION_KEY = "location_key"
@@ -20,6 +20,15 @@ CONF_UPDATE_INTERVAL = "update_interval"
 CONF_SENSOR_LANGUAGE = "sensor_language"
 SENSOR_LANGUAGE_AUTO = "auto"
 SENSOR_LANGUAGES: tuple[str, ...] = (SENSOR_LANGUAGE_AUTO, "vi", "en")
+
+# Which coast the landfall sensor watches. Everything else about a storm is
+# reported wherever it happens; that one sensor answers "is a storm coming
+# ashore HERE", and here is not the same country for every install. Chosen when
+# the entry is set up — defaulted from the country of the location picked — and
+# changeable in the options afterwards.
+CONF_LANDFALL_COUNTRY = "landfall_country"
+VIETNAM = "Việt Nam"
+DEFAULT_LANDFALL_COUNTRY = VIETNAM
 
 # Home Assistant builds entity ids from the local language only for languages it
 # can slugify safely; Vietnamese is not one of them, so a Vietnamese install
@@ -88,7 +97,9 @@ COAST_LOOKUP_MAX_KM = 2000
 
 # Vietnamese coastal reference points, named by province because that is the
 # useful answer here. Everywhere else in the basin comes from coastline.py,
-# named by country. Ordered north to south.
+# named by country — which is why VIETNAM above exists: it is the one country
+# whose points do not carry its name.
+# Ordered north to south.
 VIETNAM_COAST: tuple[tuple[str, float, float], ...] = (
     ("Quảng Ninh", 21.05, 107.35),
     ("Hải Phòng", 20.75, 106.75),

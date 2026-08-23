@@ -19,7 +19,8 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 - Danh sách mọi cơn bão đang hoạt động, sắp theo khoảng cách tới vị trí của bạn
 - Mỗi cơn bão một sensor riêng (`Storm 1/2/3`), kèm: cấp bão theo thang Việt Nam (áp thấp nhiệt đới → siêu bão), cấp Beaufort, sức gió km/h, áp suất, khoảng cách và bão đang ở phía nào
 - **Hướng di chuyển** viết bằng chữ, ví dụ „Di chuyển hướng Tây Bắc, 21 km/h", suy ra từ hai điểm quỹ đạo gần nhất
-- **Dự kiến vào đất liền**: tỉnh ven biển mà đường bão hướng tới và thời điểm, ví dụ „Dự kiến vào khu vực Quảng Bình khoảng 2026-08-13 12:00 (theo JMA)". Đường đi lấy theo thứ tự tin cậy JMA → ECMWF → các mô hình khác, và quỹ đạo quá khứ lẫn dự báo được lưu trong thuộc tính để vẽ lên bản đồ
+- **Dự kiến vào đất liền** (trên từng sensor `Storm 1/2/3`): nơi đường bão gặp đất liền đầu tiên — tỉnh ven biển nếu là Việt Nam, tên nước nếu là chỗ khác — kèm thời điểm, ví dụ „Dự kiến vào Quảng Bình khoảng 12:00 13/08 (theo JMA)". Đường đi lấy theo thứ tự tin cậy JMA → ECMWF → các mô hình khác, và quỹ đạo quá khứ lẫn dự báo được lưu trong thuộc tính để vẽ lên bản đồ
+- **Sensor `Nearest Storm Landfall` chỉ nói chuyện đổ bộ vào quốc gia bạn chọn** — chọn lúc cài đặt, mặc định là quốc gia của địa điểm bạn thêm, đổi lại được trong Tùy chọn. Có cơn nào cắt vào bờ nước đó thì nó ghi tên cơn bão, nơi sắp vào (tỉnh nếu là Việt Nam), thời điểm, khoảng cách còn lại và khoảng cách từ chỗ bạn: „Bão Kajiki: Dự kiến vào Quảng Trị khoảng 22:00 25/08, còn khoảng 380 km (~18 giờ nữa), cách bạn 210 km, cấp 13 khi đổ bộ (theo JMA)". Không có cơn nào thì chỉ một dòng „Không có bão đổ bộ Việt Nam", kèm thuộc tính `landfall_in_country: false` để dashboard ẩn thẻ đi (`watched_country` cho biết đang theo dõi nước nào). Bão vòng qua Philippines rồi mới sang Việt Nam vẫn tính đúng: điểm cắt bờ của nước đang theo dõi được dò riêng, chứ không lấy chỗ bão gặp đất liền đầu tiên
 - Cảnh báo thời tiết chính thức (CAP) cho vị trí đã chọn
 - Khi không có bão nào: các sensor báo „Không có bão", `Storm Count` = 0. Khi bão tan hoặc bão mới xuất hiện gần hơn, các slot tự xếp lại theo khoảng cách — `Storm 1` luôn là cơn gần bạn nhất.
 - Khi không gọi được Windy: **giữ nguyên số liệu bão lần trước** và đánh dấu thuộc tính `stale: true`, thay vì báo „Không có bão" — đang bão mà sensor tự nhiên nói hết bão là kiểu sai tệ nhất.
@@ -50,7 +51,7 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 4. Khởi động lại Home Assistant.
 5. Thêm tích hợp: Cài đặt > Thiết bị & Dịch vụ > Thêm tích hợp > accuweather.
 6. Chọn tỉnh/thành phố và quận/huyện mà bạn muốn hiển thị thông tin thời tiết.
-7. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút).
+7. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút) và **quốc gia theo dõi bão đổ bộ** (mặc định lấy theo quốc gia của địa điểm vừa chọn).
 
 
 ### Cài đặt thủ công
@@ -60,7 +61,7 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 3. Khởi động lại Home Assistant.
 4. Thêm tích hợp: Cài đặt > Thiết bị & Dịch vụ > Thêm tích hợp > accuweather.
 5. Chọn tỉnh/thành phố và quận/huyện mà bạn muốn hiển thị thông tin thời tiết.
-6. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút).
+6. Tùy chọn cấu hình thời gian cập nhật (mặc định 5 phút) và **quốc gia theo dõi bão đổ bộ** (mặc định lấy theo quốc gia của địa điểm vừa chọn).
 
 ## Cấu hình
 
@@ -69,9 +70,9 @@ Bạn có thể thay đổi cấu hình của tích hợp bất cứ lúc nào:
 1. Đi tới Cài đặt > Thiết bị & Dịch vụ
 2. Tìm tích hợp AccuWeather và nhấn vào Tùy chọn
 3. Cấu hình:
-   - Chọn tỉnh/thành phố
-   - Cài đặt thời gian cập nhật (từ 3 đến 60 phút)
-   - Chọn quận/huyện
+   - Thời gian cập nhật (từ 3 đến 60 phút)
+   - Ngôn ngữ sensor (theo Home Assistant, tiếng Việt, hoặc tiếng Anh)
+   - Quốc gia theo dõi bão đổ bộ
 
 ## Sử dụng
 
@@ -84,27 +85,26 @@ Sau khi cài đặt, các entity sau sẽ được tạo ra:
 - 22 cảm biến sức khỏe & hoạt động
 - Cảm biến bão: `Storm Count`, `Nearby Storm Count`, `Nearest Storm Distance`, `Nearest Storm Movement`, `Nearest Storm Landfall`, `Storm 1`, `Storm 2`, `Storm 3`, `Weather Alerts`
 
-### Ví dụ tự động hoá: báo khi bão hướng vào đất liền
+### Ví dụ tự động hoá: báo khi bão hướng vào bờ
 
 ```yaml
 automation:
-  - alias: Cảnh báo bão vào đất liền
+  - alias: Cảnh báo bão đổ bộ
     triggers:
       - trigger: state
         entity_id: sensor.accuweather_ha_noi_nearest_storm_landfall
     conditions:
       - condition: template
-        value_template: "{{ 'Dự kiến vào khu vực' in trigger.to_state.state }}"
+        value_template: "{{ state_attr(trigger.entity_id, 'landfall_in_country') }}"
     actions:
       - action: notify.mobile_app
         data:
           title: >-
-            {{ state_attr('sensor.accuweather_ha_noi_storm_1', 'name') }} —
-            {{ state_attr('sensor.accuweather_ha_noi_storm_1', 'classification') }}
+            {{ state_attr(trigger.entity_id, 'classification') }}
+            {{ state_attr(trigger.entity_id, 'name') }} —
+            {{ state_attr(trigger.entity_id, 'landfall_province') }}
           message: >-
-            {{ states('sensor.accuweather_ha_noi_nearest_storm_movement') }}.
-            {{ trigger.to_state.state }}.
-            Cách {{ states('sensor.accuweather_ha_noi_nearest_storm_distance') }} km.
+            {{ trigger.to_state.state }}
 ```
 
 ### Xem bản đồ bão trong Home Assistant
@@ -148,7 +148,7 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
   Nếu vẫn gặp 403, đọc thông báo trong log — nó phân biệt hai trường hợp: đã dùng dấu vết trình duyệt mà vẫn bị chặn (hãy đổi máy chủ VPN hoặc tắt VPN cho Home Assistant), hoặc `curl_cffi` chưa cài được (tìm lỗi cài đặt trong log lúc khởi động). Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
 - Dữ liệu bão lấy từ endpoint công khai của Windy, gộp sẵn JMA, NOAA NHC, UKMO, BoM, IMD cùng các mô hình tự dò trên ECMWF/GFS/ICON. Endpoint này không có tài liệu chính thức nên có thể thay đổi; khi đó các sensor bão sẽ trống chứ không làm hỏng phần thời tiết.
-- **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.
+- **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển Việt Nam và đường bờ biển các nước trong vùng. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.
 - Độ chính xác của dữ liệu thời tiết phụ thuộc AccuWeather; một số khu vực không có đủ dữ liệu chi tiết (ví dụ nơi không có chỉ số phấn hoa hoặc MinuteCast).
 
 ## Phát triển trong tương lai

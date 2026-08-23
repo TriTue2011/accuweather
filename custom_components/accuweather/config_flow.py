@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -20,10 +21,12 @@ from homeassistant.config_entries import ConfigEntry
 
 from .const import (
     DOMAIN,
+    CONF_LANDFALL_COUNTRY,
     CONF_LOCATION_KEY,
     CONF_LOCATION_NAME,
     CONF_SENSOR_LANGUAGE,
     CONF_UPDATE_INTERVAL,
+    DEFAULT_LANDFALL_COUNTRY,
     DEFAULT_UPDATE_INTERVAL,
     MIN_UPDATE_INTERVAL,
     MAX_UPDATE_INTERVAL,
@@ -31,7 +34,9 @@ from .const import (
     SENSOR_LANGUAGES,
 )
 from .fetcher import HtmlFetcher
+from .i18n import resolve_language
 from .utils import get_location_keys
+from .windy import landfall_countries, place_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +45,43 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required("location"): str,
     }
 )
+
+
+def country_selector(hass) -> SelectSelector:
+    """Dropdown of every coast a landfall can be watched on.
+
+    The stored value is the country name as the coastline data spells it, which
+    is Vietnamese; only the label follows the interface language.
+    """
+    language = resolve_language(None, hass.config.language)
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                SelectOptionDict(value=country, label=place_name(country, language))
+                for country in sorted(
+                    landfall_countries(), key=lambda c: place_name(c, language)
+                )
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def country_of_location(long_name: str | None) -> str:
+    """Which country to watch, taken from the location that was picked.
+
+    AccuWeather's autocomplete is asked in Vietnamese and answers "Cầu Giấy, Hà
+    Nội, Việt Nam", so the last part is the country under the same name the
+    coastline data uses. A country with no coast in the tracked basin — or a
+    name that does not match — leaves the default in place, and the person
+    setting up can pick another from the list.
+    """
+    if long_name:
+        tail = long_name.split(",")[-1].strip().casefold()
+        for country in landfall_countries():
+            if country.casefold() == tail:
+                return country
+    return DEFAULT_LANDFALL_COUNTRY
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -52,6 +94,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._locations: list[tuple[str, str, str]] = []
         self._selected_location_key: str = ""
         self._selected_location_name: str = ""
+        # Kept for its country, which is where the landfall option starts from.
+        self._selected_long_name: str = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -101,6 +145,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if f"{location_key}|{location_name}" == selected_location:
                     self._selected_location_key = location_key
                     self._selected_location_name = location_name
+                    self._selected_long_name = long_name or ""
                     
                     # Move to update interval configuration
                     return await self.async_step_update_interval()
@@ -140,6 +185,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_LOCATION_KEY: self._selected_location_key,
                     CONF_LOCATION_NAME: self._selected_location_name,
                     CONF_UPDATE_INTERVAL: update_interval,
+                    CONF_LANDFALL_COUNTRY: user_input.get(
+                        CONF_LANDFALL_COUNTRY, DEFAULT_LANDFALL_COUNTRY
+                    ),
                 }
             )
         
@@ -148,7 +196,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(
                 "update_interval", 
                 default=DEFAULT_UPDATE_INTERVAL
-            ): vol.All(vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL))
+            ): vol.All(vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL)),
+            vol.Optional(
+                CONF_LANDFALL_COUNTRY,
+                default=country_of_location(self._selected_long_name),
+            ): country_selector(self.hass),
         })
         
         return self.async_show_form(
@@ -183,6 +235,9 @@ class OptionsFlow(config_entries.OptionsFlow):
             new_data[CONF_SENSOR_LANGUAGE] = user_input.get(
                 CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO
             )
+            new_data[CONF_LANDFALL_COUNTRY] = user_input.get(
+                CONF_LANDFALL_COUNTRY, DEFAULT_LANDFALL_COUNTRY
+            )
 
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
@@ -196,6 +251,9 @@ class OptionsFlow(config_entries.OptionsFlow):
         current_interval = self.config_entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
         current_language = self.config_entry.data.get(
             CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO
+        )
+        current_country = self.config_entry.data.get(
+            CONF_LANDFALL_COUNTRY, DEFAULT_LANDFALL_COUNTRY
         )
 
         return self.async_show_form(
@@ -215,6 +273,10 @@ class OptionsFlow(config_entries.OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Optional(
+                    CONF_LANDFALL_COUNTRY,
+                    default=current_country,
+                ): country_selector(self.hass),
             }),
             description_placeholders={
                 "current_interval": str(current_interval // 60),
