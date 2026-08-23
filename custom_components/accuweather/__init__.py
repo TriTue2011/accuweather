@@ -8,8 +8,16 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .const import DOMAIN, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+from .const import (
+    CONF_SENSOR_LANGUAGE,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+    SENSOR_LANGUAGE_AUTO,
+)
 from .coordinator import AccuWeatherDataUpdateCoordinator
+from .i18n import resolve_language
+from .utils import accept_language
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +31,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     location_key = entry.data["location_key"]
     location_name = entry.data["location_name"]
     update_interval = entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+    # One language for the whole integration: which AccuWeather locale to read,
+    # and which language the storm sensors write their sentences in. Resolved
+    # once here, so nothing further down has to know what "auto" means. The
+    # options flow reloads the entry, which comes back through here.
+    language = resolve_language(
+        entry.data.get(CONF_SENSOR_LANGUAGE, SENSOR_LANGUAGE_AUTO),
+        hass.config.language,
+    )
+    _LOGGER.debug("AccuWeather language resolved to %s", language)
 
     # A dedicated session keeps AccuWeather's cookies (unit, language) out of
     # Home Assistant's shared session. Home Assistant closes it on shutdown.
@@ -34,12 +51,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/123.0.0.0 Safari/537.36"
             ),
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Language": accept_language(language),
         },
     )
 
     coordinator = AccuWeatherDataUpdateCoordinator(
-        hass, session, location_key, location_name, entry, update_interval
+        hass, session, location_key, location_name, entry, update_interval,
+        language,
     )
 
     if coordinator.fetcher.using_impersonation:

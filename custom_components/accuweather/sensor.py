@@ -35,6 +35,7 @@ from .const import (
 )
 from .coordinator import AccuWeatherDataUpdateCoordinator
 from .device import get_device_info
+from .i18n import text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -261,8 +262,6 @@ STORM_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         icon="mdi:alert-outline",
     ),
 )
-
-NO_STORM = "Không có bão"
 
 
 async def async_setup_entry(
@@ -521,8 +520,7 @@ class AccuWeatherSensorEntity(
         # Current weather sensors
         if "current" in self.coordinator.data:
             current = self.coordinator.data["current"]
-            details = current.get("details", {})
-            
+
             if key == "realfeel_temperature":
                 realfeel = current.get("realfeel")
                 if realfeel:
@@ -559,26 +557,13 @@ class AccuWeatherSensorEntity(
             elif key in ("sunrise", "sunset", "moon_phase"):
                 return current.get(key)
             elif key == "dew_point":
-                dew_val = details.get("Điểm sương")
-                if dew_val:
-                    match = re.search(r"(-?\d+)", str(dew_val))
-                    if match:
-                        return float(match.group(1))
-                return None
+                # Read out of the details table by the parser, which knows the
+                # labels in every language it fetches and converts °F and feet.
+                return current.get("dew_point")
             elif key == "wind_gust":
-                gust_val = details.get("Gió giật mạnh") or details.get("Gió giật")
-                if gust_val:
-                    match = re.search(r"(\d+)", str(gust_val))
-                    if match:
-                        return float(match.group(1))
-                return None
+                return current.get("wind_gust_speed")
             elif key == "cloud_ceiling":
-                ceiling_val = details.get("Trần mây")
-                if ceiling_val:
-                    match = re.search(r"(\d+)", str(ceiling_val))
-                    if match:
-                        return float(match.group(1))
-                return None
+                return current.get("cloud_ceiling")
         
         # Air quality sensors
         if "air_quality" in self.coordinator.data:
@@ -604,10 +589,13 @@ class AccuWeatherSensorEntity(
         
         # MinuteCast sensor
         if key == "minutecast":
+            unavailable = text(
+                self.coordinator.language, "minutecast_unavailable"
+            )
             minutecast = self.coordinator.data.get("minutecast")
             if minutecast is not None:
-                return minutecast.get("summary", "Không có dữ liệu MinuteCast")
-            return "Không có dữ liệu MinuteCast"
+                return minutecast.get("summary", unavailable)
+            return unavailable
         
         return None
 
@@ -708,19 +696,22 @@ class AccuWeatherStormSummarySensor(
             return nearest.get("distance_km")
         if key == "storm_nearest_beaufort":
             return nearest.get("beaufort")
+        language = self.coordinator.language
         if key == "storm_movement":
             if not nearest:
-                return NO_STORM
-            return nearest.get("movement_text") or "Chưa xác định hướng di chuyển"
+                return text(language, "no_storm")
+            return nearest.get("movement_text") or text(
+                language, "movement_unknown"
+            )
         if key == "storm_landfall":
             if not nearest:
-                return NO_STORM
+                return text(language, "no_storm")
             # The nearest storm is the one picked by distance from the
             # configured location, so this is where that distance belongs.
             return (
                 nearest.get("landfall_text_from_home")
                 or nearest.get("landfall_text")
-                or "Chưa có dấu hiệu vào đất liền"
+                or text(language, "landfall_unknown")
             )
         if key == "weather_alerts":
             return len(self._data.get("alerts") or [])
@@ -837,8 +828,9 @@ class AccuWeatherStormSensor(
         is going — the figures worth seeing without opening the attributes.
         """
         storm = self._storm
+        language = self.coordinator.language
         if not storm:
-            return NO_STORM
+            return text(language, "no_storm")
         if summary := storm.get("summary_text"):
             return summary
 
@@ -847,8 +839,10 @@ class AccuWeatherStormSensor(
         name = storm.get("name") or "?"
         classification = storm.get("classification")
         beaufort = storm.get("beaufort")
-        text = f"{classification} {name}" if classification else name
-        return f"{text} cấp {beaufort}" if beaufort else text
+        headline = f"{classification} {name}" if classification else name
+        if not beaufort:
+            return headline
+        return text(language, "storm_force", headline=headline, beaufort=beaufort)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -930,15 +924,19 @@ class AccuWeatherHealthSensorEntity(
         
         health_data = self.coordinator.data["health_activities"]
         activity_slug = self._activity_data.get("slug")
-        
+        unknown = text(self.coordinator.language, "health_unknown")
+
         # Find current activity data
         for group_activities in health_data.values():
             for activity in group_activities:
                 if activity.get("slug") == activity_slug:
-                    # Return localized category instead of raw value
-                    return activity.get("localizedCategory", activity.get("category", "Không rõ"))
-        
-        return "Không rõ"
+                    # Return localized category instead of raw value. The page
+                    # localises it for us, into the language it was fetched in.
+                    return activity.get(
+                        "localizedCategory", activity.get("category", unknown)
+                    )
+
+        return unknown
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

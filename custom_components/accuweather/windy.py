@@ -24,8 +24,9 @@ from homeassistant.util import dt as dt_util
 
 from .coastline import COASTAL_POINTS
 from .const import (
-    CARDINAL_VI,
+    CARDINAL_NAMES,
     COAST_LOOKUP_MAX_KM,
+    COUNTRY_NAME_EN,
     LANDFALL_MODEL_PRIORITY,
     LANDFALL_OBSERVED_KM,
     LANDFALL_RECENT_HOURS,
@@ -37,6 +38,7 @@ from .const import (
     WINDY_STORMS_URL,
     WIND_DIRECTION_EN,
 )
+from .i18n import FALLBACK_LANGUAGE, text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,22 +80,43 @@ def beaufort_force(wind_ms: float | None) -> int | None:
     return 0
 
 
-def classify_storm_vi(wind_ms: float | None) -> str | None:
-    """Describe a cyclone's intensity the way Vietnamese forecasts do."""
+def classify_storm(
+    wind_ms: float | None, language: str = FALLBACK_LANGUAGE
+) -> str | None:
+    """Describe a cyclone's intensity the way Vietnamese forecasts do.
+
+    The bands are the Beaufort ones Vietnamese bulletins use; the English
+    wording names the same bands rather than switching to Saffir-Simpson, so
+    that a sensor says the same thing in either language.
+    """
     force = beaufort_force(wind_ms)
     if force is None:
         return None
     if force >= 16:
-        return "Siêu bão"
-    if force >= 12:
-        return "Bão rất mạnh"
-    if force >= 10:
-        return "Bão mạnh"
-    if force >= 8:
-        return "Bão"
-    if force >= 6:
-        return "Áp thấp nhiệt đới"
-    return "Vùng áp thấp"
+        key = "storm_class_super"
+    elif force >= 12:
+        key = "storm_class_very_strong"
+    elif force >= 10:
+        key = "storm_class_strong"
+    elif force >= 8:
+        key = "storm_class_typhoon"
+    elif force >= 6:
+        key = "storm_class_depression"
+    else:
+        key = "storm_class_low"
+    return text(language, key)
+
+
+def place_name(name: str | None, language: str) -> str | None:
+    """A coastal name in `language`.
+
+    coastline.py names countries in Vietnamese, because that is what the
+    generator writes. Vietnamese provinces are proper nouns and read the same
+    either way, so they fall through untouched.
+    """
+    if not name or language == "vi":
+        return name
+    return COUNTRY_NAME_EN.get(name, name)
 
 
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -124,7 +147,9 @@ def bearing_to(lat1: float, lon1: float, lat2: float, lon2: float) -> tuple[floa
     return round(degrees, 1), cardinal
 
 
-def _movement_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
+def _movement_from_history(
+    history: list[dict[str, Any]], language: str = FALLBACK_LANGUAGE
+) -> dict[str, Any]:
     """Work out which way the storm is travelling, and how fast.
 
     The feed has no heading field, so it is derived from the two most recent
@@ -143,7 +168,7 @@ def _movement_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
         previous["latitude"], previous["longitude"],
         newest["latitude"], newest["longitude"],
     )
-    direction_vi = CARDINAL_VI.get(cardinal, cardinal)
+    direction = CARDINAL_NAMES[language].get(cardinal, cardinal)
 
     travelled = distance_km(
         previous["latitude"], previous["longitude"],
@@ -161,14 +186,15 @@ def _movement_from_history(history: list[dict[str, Any]]) -> dict[str, Any]:
         _LOGGER.debug("Windy storm history has unparsable timestamps")
 
     movement = {
-        "movement_direction": direction_vi,
+        "movement_direction": direction,
         "movement_direction_en": cardinal,
         "movement_bearing": degrees,
         "movement_speed_kmh": speed_kmh,
     }
     movement["movement_text"] = (
-        f"Di chuyển hướng {direction_vi}"
-        + (f", {speed_kmh} km/h" if speed_kmh is not None else "")
+        text(language, "movement_with_speed", direction=direction, speed=speed_kmh)
+        if speed_kmh is not None
+        else text(language, "movement", direction=direction)
     )
     return movement
 
@@ -232,7 +258,9 @@ def nearest_coast(
 
 
 def _coast_crossing(
-    track: list[dict[str, Any]], threshold_km: float
+    track: list[dict[str, Any]],
+    threshold_km: float,
+    language: str = FALLBACK_LANGUAGE,
 ) -> dict[str, Any] | None:
     """First point of a track that comes within `threshold_km` of the coast."""
     for point in track:
@@ -242,7 +270,7 @@ def _coast_crossing(
         province, distance = nearest_coast(lat, lon)
         if distance is not None and distance <= threshold_km:
             return {
-                "province": province,
+                "province": place_name(province, language),
                 "distance_km": distance,
                 "time": point.get("time"),
                 "latitude": lat,
@@ -262,6 +290,7 @@ def predict_landfall(
     forecasts: dict[str, dict[str, Any]],
     history: list[dict[str, Any]] | None = None,
     threshold_km: float = LANDFALL_THRESHOLD_KM,
+    language: str = FALLBACK_LANGUAGE,
 ) -> dict[str, Any] | None:
     """Work out where a storm's track meets the Vietnamese coast, past or future.
 
@@ -284,7 +313,7 @@ def predict_landfall(
         observed = sorted(
             history, key=lambda p: p.get("time") or "", reverse=True
         )
-        hit = _coast_crossing(observed, LANDFALL_OBSERVED_KM)
+        hit = _coast_crossing(observed, LANDFALL_OBSERVED_KM, language)
         # An old crossing is history, not weather. Past that age the storm has
         # moved on and its forecast track is the thing worth reporting.
         if hit and (hours := hours_until(hit.get("time"))) is not None:
@@ -307,7 +336,7 @@ def predict_landfall(
             for point in (forecasts[model].get("track") or [])
             if (hours := hours_until(point.get("time"))) is None or hours > 0
         ]
-        if hit := _coast_crossing(track, threshold_km):
+        if hit := _coast_crossing(track, threshold_km, language):
             hit["model"] = model
             hit["status"] = "forecast"
             return hit
@@ -329,7 +358,7 @@ def local_time_text(raw: str | None) -> str | None:
     return dt_util.as_local(stamp).strftime("%H:%M %d/%m")
 
 
-def describe_storm(storm: dict[str, Any]) -> str:
+def describe_storm(storm: dict[str, Any], language: str = FALLBACK_LANGUAGE) -> str:
     """One bulletin line for a single storm: what, where, which way, going in.
 
     The state of a storm sensor used to be the name alone, which left the
@@ -340,31 +369,44 @@ def describe_storm(storm: dict[str, Any]) -> str:
     """
     name = storm.get("name") or "?"
     classification = storm.get("classification")
-    parts = [f"{classification} {name}" if classification else name]
+    headline = f"{classification} {name}" if classification else name
     if beaufort := storm.get("beaufort"):
-        parts[0] += f" cấp {beaufort}"
+        headline = text(
+            language, "storm_force", headline=headline, beaufort=beaufort
+        )
+    parts = [headline]
 
     distance = storm.get("distance_km")
     direction = storm.get("direction_from_home")
     if distance is not None and direction:
-        parts.append(f"cách {round(distance)} km về phía {direction}")
+        parts.append(
+            text(
+                language,
+                "storm_distance_direction",
+                km=round(distance),
+                direction=direction,
+            )
+        )
     elif distance is not None:
-        parts.append(f"cách {round(distance)} km")
+        parts.append(text(language, "storm_distance", km=round(distance)))
 
     if movement := storm.get("movement_text"):
+        # Mid-sentence now, so it loses the capital it was written with.
         parts.append(movement[0].lower() + movement[1:])
 
     line = ", ".join(parts)
 
     landfall = storm.get("landfall") or {}
     if province := landfall.get("province"):
+        key = (
+            "summary_landfall_past"
+            if landfall.get("status") == "past"
+            else "summary_landfall_forecast"
+        )
+        line = text(language, key, line=line, place=province)
         when = landfall.get("time_text") or local_time_text(landfall.get("time"))
-        if landfall.get("status") == "past":
-            line += f" — đã vào {province}"
-        else:
-            line += f" — dự kiến vào {province}"
         if when:
-            line += f" lúc {when}"
+            line = text(language, "summary_landfall_time", line=line, when=when)
 
     # Home Assistant rejects a state longer than 255 characters, which would
     # take the whole sensor down rather than just truncate the text.
@@ -390,8 +432,9 @@ def describe_landfall(
     heading_towards: str | None = None,
     distance_to_coast: float | None = None,
     from_home: bool = False,
+    language: str = FALLBACK_LANGUAGE,
 ) -> str:
-    """One line of plain Vietnamese about where the storm is going.
+    """One plain line about where the storm is going.
 
     Three situations, told apart by the track: the storm has already come
     ashore, it is forecast to, or nothing on its track reaches the coast.
@@ -403,44 +446,64 @@ def describe_landfall(
     """
     if not landfall:
         if heading_towards and distance_to_coast is not None:
-            return (
-                f"Chưa có dấu hiệu vào đất liền; gần bờ {heading_towards} nhất "
-                f"khoảng {round(distance_to_coast)} km"
+            return text(
+                language,
+                "landfall_none_coast",
+                place=heading_towards,
+                km=round(distance_to_coast),
             )
         # No land within COAST_LOOKUP_MAX_KM: the storm is out in open ocean.
-        return "Đang ở ngoài khơi, chưa có đất liền nào trong tầm"
+        return text(language, "landfall_none_offshore")
 
     when = local_time_text(landfall.get("time"))
     force = landfall.get("beaufort")
     home = landfall.get("distance_from_home_km") if from_home else None
+    place = landfall["province"]
+    past = landfall.get("status") == "past"
 
-    if landfall.get("status") == "past":
+    if past:
         # "khu vực" is dropped: the name can now be a country as easily as a
         # Vietnamese province, and "đã vào khu vực Nhật Bản" reads oddly.
-        parts = [f"Đã vào {landfall['province']}"]
-        if when:
-            parts[0] += f" lúc {when}"
-        if home is not None:
-            parts.append(f"cách bạn {round(home)} km")
-        if force:
-            parts.append(f"cấp {force} khi vào bờ")
-        return ", ".join(parts)
+        opening = (
+            text(language, "landfall_past_time", place=place, when=when)
+            if when
+            else text(language, "landfall_past", place=place)
+        )
+    else:
+        opening = (
+            text(language, "landfall_forecast_time", place=place, when=when)
+            if when
+            else text(language, "landfall_forecast", place=place)
+        )
+    parts = [opening]
 
-    parts = [f"Dự kiến vào {landfall['province']}"]
-    if when:
-        parts[0] += f" khoảng {when}"
-    remaining = landfall.get("distance_from_storm_km")
-    if remaining is not None:
-        leg = f"còn khoảng {round(remaining)} km"
+    if not past and (remaining := landfall.get("distance_from_storm_km")) is not None:
         hours = landfall.get("hours_away")
-        if hours is not None and hours > 0:
-            leg += f" (~{round(hours)} giờ nữa)"
-        parts.append(leg)
+        parts.append(
+            text(
+                language,
+                "landfall_remaining_hours",
+                km=round(remaining),
+                hours=round(hours),
+            )
+            if hours is not None and hours > 0
+            else text(language, "landfall_remaining", km=round(remaining))
+        )
     if home is not None:
-        parts.append(f"cách bạn {round(home)} km")
+        parts.append(text(language, "landfall_from_home", km=round(home)))
     if force:
-        parts.append(f"cấp {force} khi đổ bộ")
-    return ", ".join(parts) + f" (theo {landfall['model'].upper()})"
+        parts.append(
+            text(
+                language,
+                "landfall_force_past" if past else "landfall_force_forecast",
+                beaufort=force,
+            )
+        )
+
+    line = ", ".join(parts)
+    if past:
+        return line
+    return line + text(language, "landfall_model", model=landfall["model"].upper())
 
 
 async def _get_json(
@@ -504,7 +567,10 @@ def _as_float(value: Any) -> float | None:
 
 
 def _storm_summary(
-    storm: dict[str, Any], latitude: float | None, longitude: float | None
+    storm: dict[str, Any],
+    latitude: float | None,
+    longitude: float | None,
+    language: str = FALLBACK_LANGUAGE,
 ) -> dict[str, Any]:
     """Normalise one storm: m/s -> km/h, Pascal -> hPa, plus distance."""
     wind_ms = _as_float(storm.get("windSpeed"))
@@ -519,7 +585,7 @@ def _storm_summary(
         "wind_speed_ms": wind_ms,
         "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
         "beaufort": beaufort_force(wind_ms),
-        "classification": classify_storm_vi(wind_ms),
+        "classification": classify_storm(wind_ms, language),
     }
 
     if (
@@ -538,7 +604,9 @@ def _storm_summary(
         )
         summary["direction_from_home_degrees"] = degrees
         summary["direction_from_home_en"] = cardinal
-        summary["direction_from_home"] = CARDINAL_VI.get(cardinal, cardinal)
+        summary["direction_from_home"] = CARDINAL_NAMES[language].get(
+            cardinal, cardinal
+        )
 
     return summary
 
@@ -562,6 +630,7 @@ async def get_storms(
     longitude: float | None = None,
     radius_km: float = STORM_NEARBY_RADIUS_KM,
     detail_limit: int = STORM_SLOTS,
+    language: str = FALLBACK_LANGUAGE,
 ) -> dict[str, Any]:
     """Fetch active tropical cyclones, closest first.
 
@@ -576,7 +645,7 @@ async def get_storms(
         return empty
 
     storms = [
-        _storm_summary(storm, latitude, longitude)
+        _storm_summary(storm, latitude, longitude, language)
         for storm in payload.get("storms", [])
         if isinstance(storm, dict)
     ]
@@ -600,7 +669,7 @@ async def get_storms(
     for storm in storms:
         if storm.get("id") not in detailed_ids:
             continue
-        await _add_storm_detail(session, storm, latitude, longitude)
+        await _add_storm_detail(session, storm, latitude, longitude, language)
 
     nearest = storms[0] if storms else None
 
@@ -650,6 +719,7 @@ async def _add_storm_detail(
     storm: dict[str, Any],
     latitude: float | None = None,
     longitude: float | None = None,
+    language: str = FALLBACK_LANGUAGE,
 ) -> None:
     """Attach track, movement and landfall estimate to a storm, in place.
 
@@ -689,7 +759,7 @@ async def _add_storm_detail(
     storm["history"] = history
     storm["forecast_models"] = sorted(forecasts)
     storm["forecast"] = forecasts
-    storm.update(_movement_from_history(history))
+    storm.update(_movement_from_history(history, language))
     if history:
         storm["pressure_hpa"] = _central_pressure(history, forecasts)
         # ISO (UTC, as the feed sends it) for templates, plus a local-time
@@ -699,10 +769,10 @@ async def _add_storm_detail(
 
     if storm.get("latitude") is not None and storm.get("longitude") is not None:
         province, distance = nearest_coast(storm["latitude"], storm["longitude"])
-        storm["nearest_coast"] = province
+        storm["nearest_coast"] = place_name(province, language)
         storm["distance_to_coast_km"] = distance
 
-    landfall = predict_landfall(forecasts, history)
+    landfall = predict_landfall(forecasts, history, language=language)
     if landfall:
         # How much further the storm still has to travel to get there, and how
         # long that leaves. Both are meaningless once it has already landed.
@@ -736,6 +806,7 @@ async def _add_storm_detail(
         landfall,
         storm.get("nearest_coast"),
         storm.get("distance_to_coast_km"),
+        language=language,
     )
     # Same sentence with the distance from the configured location added, for
     # the "nearest storm" sensor. Kept as a second string because the nearest
@@ -745,16 +816,23 @@ async def _add_storm_detail(
         storm.get("nearest_coast"),
         storm.get("distance_to_coast_km"),
         from_home=True,
+        language=language,
     )
     # Built last: it quotes the landfall estimate worked out just above.
-    storm["summary_text"] = describe_storm(storm)
+    storm["summary_text"] = describe_storm(storm, language)
 
 
 async def get_alerts(
-    session: aiohttp.ClientSession, latitude: float, longitude: float
+    session: aiohttp.ClientSession,
+    latitude: float,
+    longitude: float,
+    language: str = FALLBACK_LANGUAGE,
 ) -> list[dict[str, Any]]:
-    """Fetch official CAP weather alerts for a point (empty when none apply)."""
-    url = WINDY_ALERTS_URL.format(lat=latitude, lon=longitude)
+    """Fetch official CAP weather alerts for a point (empty when none apply).
+
+    Windy translates the headline and event name itself, given `lang`.
+    """
+    url = WINDY_ALERTS_URL.format(lat=latitude, lon=longitude, lang=language)
     payload = await _get_json(session, url)
     if not isinstance(payload, list):
         return []

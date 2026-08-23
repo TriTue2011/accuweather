@@ -12,10 +12,11 @@ CONF_LOCATION_KEY = "location_key"
 CONF_LOCATION_NAME = "location_name"
 CONF_UPDATE_INTERVAL = "update_interval"
 
-# Language of the sensor names. "auto" leaves it to Home Assistant, which uses
-# the language set in Settings; the other values pin the names to one language
-# regardless of it, for people running an English UI who want Vietnamese
-# sensors (or the reverse).
+# Language of the whole integration: the sensor names, the pages fetched from
+# AccuWeather, and the sentences the storm sensors write. "auto" follows the
+# language set in Home Assistant; the other values pin it regardless of that,
+# for people running an English interface who want Vietnamese sensors (or the
+# reverse). The option keeps its old key so existing entries keep their choice.
 CONF_SENSOR_LANGUAGE = "sensor_language"
 SENSOR_LANGUAGE_AUTO = "auto"
 SENSOR_LANGUAGES: tuple[str, ...] = (SENSOR_LANGUAGE_AUTO, "vi", "en")
@@ -50,7 +51,9 @@ AUTOCOMPLETE_URL = f"{BASE_URL}/web-api/autocomplete"
 # Windy.com — public endpoints, no API key required.
 WINDY_NODE_URL = "https://node.windy.com"
 WINDY_STORMS_URL = f"{WINDY_NODE_URL}/tc/v2/storms"
-WINDY_ALERTS_URL = WINDY_NODE_URL + "/capalerts/{lat}/{lon}?source=hp&lang=vi&maxCount=6"
+WINDY_ALERTS_URL = (
+    WINDY_NODE_URL + "/capalerts/{lat}/{lon}?source=hp&lang={lang}&maxCount=6"
+)
 
 # A storm further away than this is listed but not tracked in detail.
 STORM_NEARBY_RADIUS_KM = 2500
@@ -146,6 +149,38 @@ WIND_DIRECTION_VI: dict[str, tuple[str, float]] = {
     "BTB": ("NNW", 337.5),
 }
 
+# The forecast pages label every reading in the language they were served in,
+# and the values are looked up by that label. One entry per reading, listing the
+# labels seen in each language, so a page in either one still parses — and a
+# page that mixes them, as AccuWeather occasionally does, parses too.
+DETAIL_LABELS: dict[str, tuple[str, ...]] = {
+    "wind": ("Gió", "Wind"),
+    "wind_gusts": ("Gió giật mạnh", "Gió giật", "Wind Gusts"),
+    "humidity": ("Độ ẩm", "Humidity"),
+    "dew_point": ("Điểm sương", "Dew Point"),
+    "pressure": ("Khí áp", "Pressure"),
+    "cloud_cover": ("Mật độ mây", "Cloud Cover"),
+    "visibility": ("Tầm nhìn", "Visibility"),
+    "cloud_ceiling": ("Trần mây", "Cloud Ceiling"),
+    "uv_index": ("Chỉ số UV tối đa", "Max UV Index"),
+    "heat_index": ("Chỉ số nhiệt", "Heat Index"),
+    "air_quality": ("Chất lượng không khí", "Air Quality"),
+    # AccuWeather's own trademarks, identical in every language.
+    "realfeel": ("RealFeel®",),
+    "realfeel_shade": ("RealFeel Shade™",),
+    "brightness": ("AccuLumen Brightness Index™",),
+    # Total precipitation and rain alone are separate rows in English and share
+    # one label in Vietnamese. They differ only when snow is falling, so each
+    # reading names the one it wants first.
+    "precipitation": ("Lượng mưa", "Mưa", "Precipitation", "Rain Amount"),
+    "rain_amount": ("Mưa", "Lượng mưa", "Rain Amount", "Precipitation"),
+    "precipitation_hours": (
+        "Tổng số giờ mưa", "Total Hours of Precipitation", "Total Hours of Rain",
+    ),
+    "precipitation_probability": ("Khả năng dự báo", "Probability of Precipitation"),
+    "thunderstorm_probability": ("Dự báo Dông", "Probability of Thunderstorms"),
+}
+
 # English cardinals -> full Vietnamese names, for describing which way a storm
 # is heading in plain words.
 CARDINAL_VI: dict[str, str] = {
@@ -165,6 +200,50 @@ CARDINAL_VI: dict[str, str] = {
     "WNW": "Tây Tây Bắc",
     "NW": "Tây Bắc",
     "NNW": "Bắc Tây Bắc",
+}
+
+# The same in English, written out rather than abbreviated: these end up inside
+# a sentence ("300 km to the northeast"), where "NE" reads like a code.
+CARDINAL_EN: dict[str, str] = {
+    "N": "north",
+    "NNE": "north-northeast",
+    "NE": "northeast",
+    "ENE": "east-northeast",
+    "E": "east",
+    "ESE": "east-southeast",
+    "SE": "southeast",
+    "SSE": "south-southeast",
+    "S": "south",
+    "SSW": "south-southwest",
+    "SW": "southwest",
+    "WSW": "west-southwest",
+    "W": "west",
+    "WNW": "west-northwest",
+    "NW": "northwest",
+    "NNW": "north-northwest",
+}
+
+CARDINAL_NAMES: dict[str, dict[str, str]] = {"vi": CARDINAL_VI, "en": CARDINAL_EN}
+
+# Coastal landmasses are named in Vietnamese in coastline.py, because that is
+# what scripts/gen_coastline.py writes. Only the names that actually differ are
+# listed; "Philippines" and "Brunei" are spelled the same either way. Vietnamese
+# provinces are proper nouns and are left alone.
+COUNTRY_NAME_EN: dict[str, str] = {
+    "Campuchia": "Cambodia",
+    "Hàn Quốc": "South Korea",
+    "Hồng Kông": "Hong Kong",
+    "Lào": "Laos",
+    "Nga": "Russia",
+    "Nhật Bản": "Japan",
+    "Quần đảo Bắc Mariana": "N. Mariana Is.",
+    "Thái Lan": "Thailand",
+    "Triều Tiên": "North Korea",
+    "Trung Quốc": "China",
+    "Đài Loan": "Taiwan",
+    "Đông Timor": "Timor-Leste",
+    "Úc": "Australia",
+    "Ấn Độ": "India",
 }
 
 # English cardinals -> degrees, in case a page is served in English.

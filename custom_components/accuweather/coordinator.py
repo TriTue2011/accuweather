@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL, SLOW_REFRESH_EVERY
+from .i18n import FALLBACK_LANGUAGE, text
 from .utils import (
     EMPTY_AIR_QUALITY,
     BlockedError,
@@ -38,12 +39,17 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         location_name: str,
         config_entry: ConfigEntry,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
+        language: str = FALLBACK_LANGUAGE,
     ) -> None:
         """Initialize."""
         self.location_key = location_key
         self.location_name = location_name
         self.location_slug = slugify(location_name)
         self.session = session
+        # Which AccuWeather locale to read, and which language the sensors
+        # write in. Already resolved: "auto" was turned into a real language
+        # when the entry was set up.
+        self.language = language
         # AccuWeather needs a browser TLS fingerprint to get past its bot
         # protection; Windy is happy with the plain Home Assistant session.
         self.fetcher = HtmlFetcher(session)
@@ -100,7 +106,9 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             # Sending many concurrent requests is a strong bot signal.
             await asyncio.sleep(0.5)
 
-            current_weather = await get_current_weather(self.fetcher, self.location_key, self.location_slug)
+            current_weather = await get_current_weather(
+                self.fetcher, self.location_key, self.location_slug, self.language
+            )
             if isinstance(current_weather, Exception):
                 _LOGGER.debug(
                     "Exception getting current weather: %s: %s",
@@ -129,7 +137,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             if refresh_slow:
                 await asyncio.sleep(0.5)
 
-                daily_forecast = await get_daily_forecast(self.fetcher, self.location_key, self.location_slug)
+                daily_forecast = await get_daily_forecast(
+                    self.fetcher, self.location_key, self.location_slug,
+                    self.language,
+                )
                 if isinstance(daily_forecast, Exception):
                     _LOGGER.debug(
                         "Exception getting daily forecast: %s: %s",
@@ -140,7 +151,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                hourly_forecast = await get_hourly_forecast(self.fetcher, self.location_key, self.location_slug)
+                hourly_forecast = await get_hourly_forecast(
+                    self.fetcher, self.location_key, self.location_slug,
+                    language=self.language,
+                )
                 if isinstance(hourly_forecast, Exception):
                     _LOGGER.debug(
                         "Exception getting hourly forecast: %s: %s",
@@ -151,7 +165,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                air_quality = await get_air_quality(self.fetcher, self.location_key, self.location_slug)
+                air_quality = await get_air_quality(
+                    self.fetcher, self.location_key, self.location_slug,
+                    self.language,
+                )
                 if isinstance(air_quality, Exception):
                     _LOGGER.debug(
                         "Exception getting air quality: %s: %s",
@@ -162,7 +179,10 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
                 await asyncio.sleep(0.5)
 
-                health_activities = await crawl_all_health_activities(self.fetcher, self.location_key, self.location_slug)
+                health_activities = await crawl_all_health_activities(
+                    self.fetcher, self.location_key, self.location_slug,
+                    self.language,
+                )
                 if isinstance(health_activities, Exception):
                     _LOGGER.debug(
                         "Exception getting health activities: %s: %s",
@@ -188,7 +208,9 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
 
             await asyncio.sleep(0.5)
 
-            minutecast = await get_minutecast_data(self.fetcher, self.location_key, self.location_slug)
+            minutecast = await get_minutecast_data(
+                self.fetcher, self.location_key, self.location_slug, self.language
+            )
             if isinstance(minutecast, Exception):
                 _LOGGER.debug(
                     "Exception getting MinuteCast: %s: %s",
@@ -220,11 +242,13 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             alerts: list[dict[str, Any]] = self._alerts_cache
             try:
                 storms = await get_storms(
-                    self.session, self.latitude, self.longitude
+                    self.session, self.latitude, self.longitude,
+                    language=self.language,
                 )
                 if self.latitude is not None and self.longitude is not None:
                     alerts = await get_alerts(
-                        self.session, self.latitude, self.longitude
+                        self.session, self.latitude, self.longitude,
+                        self.language,
                     )
                     self._alerts_cache = alerts
             except Exception as err:  # noqa: BLE001
@@ -266,21 +290,14 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             # two remedies applies: without curl_cffi the requests do not look
             # like a browser at all, which is what gets blocked first on
             # datacenter and VPN addresses.
-            if self.fetcher.using_impersonation:
-                hint = (
-                    "Đã dùng dấu vết trình duyệt mà vẫn bị chặn — địa chỉ IP này "
-                    "có thể bị đánh dấu. Thử đổi máy chủ VPN, hoặc tắt VPN cho "
-                    "Home Assistant, hoặc tăng thời gian cập nhật."
-                )
-            else:
-                hint = (
-                    "Thư viện curl_cffi chưa cài được nên yêu cầu không mang dấu "
-                    "vết trình duyệt; đây là nguyên nhân phổ biến nhất khi chạy "
-                    "qua VPN. Xem log lúc khởi động để biết vì sao cài thất bại."
-                )
+            hint = text(
+                self.language,
+                "blocked_hint_impersonated"
+                if self.fetcher.using_impersonation
+                else "blocked_hint_plain",
+            )
             raise UpdateFailed(
-                f"AccuWeather từ chối yêu cầu (HTTP {err.status}) — trang web đang "
-                f"chặn truy cập tự động từ địa chỉ IP này. {hint}"
+                text(self.language, "blocked", status=err.status, hint=hint)
             ) from err
         except UpdateFailed:
             # Re-raise UpdateFailed without wrapping

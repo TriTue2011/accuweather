@@ -60,11 +60,11 @@
         "description": "Change settings for AccuWeather integration. You can adjust the weather data update frequency.",
         "data": {
           "update_interval": "Update Interval (seconds)",
-          "sensor_language": "Sensor name language"
+          "sensor_language": "Sensor language"
         },
         "data_description": {
           "update_interval": "Time between data updates (300-3600 seconds)",
-          "sensor_language": "Language of the sensor names, independent of the interface language. Entity IDs stay as they are."
+          "sensor_language": "Language of the sensor names and of what they report — conditions, air quality, health indices and storm bulletins — independent of the interface language. Entity IDs stay as they are."
         }
       }
     }

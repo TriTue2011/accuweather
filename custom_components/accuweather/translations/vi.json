@@ -60,11 +60,11 @@
         "description": "Thay đổi cài đặt cho tích hợp AccuWeather. Bạn có thể điều chỉnh tần suất cập nhật dữ liệu thời tiết.",
         "data": {
           "update_interval": "Khoảng thời gian cập nhật (giây)",
-          "sensor_language": "Ngôn ngữ tên sensor"
+          "sensor_language": "Ngôn ngữ sensor"
         },
         "data_description": {
           "update_interval": "Thời gian giữa các lần cập nhật dữ liệu (300-3600 giây)",
-          "sensor_language": "Ngôn ngữ hiển thị tên sensor, không phụ thuộc ngôn ngữ giao diện. Entity ID giữ nguyên."
+          "sensor_language": "Ngôn ngữ của tên sensor và của nội dung sensor báo về — hiện tượng thời tiết, chất lượng không khí, chỉ số sức khoẻ và bản tin bão — không phụ thuộc ngôn ngữ giao diện. Entity ID giữ nguyên."
         }
       }
     }

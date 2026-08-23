@@ -16,10 +16,12 @@ from .const import (
     BASE_URL,
     CONDITION_MAP,
     CONDITION_MAP_VI,
+    DETAIL_LABELS,
     HOURLY_DAYS,
     WIND_DIRECTION_EN,
     WIND_DIRECTION_VI,
 )
+from .i18n import FALLBACK_LANGUAGE, text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,8 +58,22 @@ def slugify(text: str) -> str:
     return slug
 
 
-def get_headers(referer: str | None = None) -> dict[str, str]:
-    """Get default headers for requests."""
+def detail(details: dict[str, str], key: str) -> str | None:
+    """One reading out of a details table, whichever language it is labelled in.
+
+    Returns None when the page did not render that row, which AccuWeather does
+    routinely — there is no UV index overnight, and no gust without wind.
+    """
+    for label in DETAIL_LABELS[key]:
+        if (value := details.get(label)) is not None:
+            return value
+    return None
+
+
+def get_headers(
+    referer: str | None = None, language: str = FALLBACK_LANGUAGE
+) -> dict[str, str]:
+    """Get default headers for requests, for a page in `language`."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -67,7 +83,7 @@ def get_headers(referer: str | None = None) -> dict[str, str]:
             "text/html,application/xhtml+xml,application/xml;q=0.9,"
             "image/avif,image/webp,image/apng,*/*;q=0.8"
         ),
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Language": accept_language(language),
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
@@ -81,21 +97,30 @@ def get_headers(referer: str | None = None) -> dict[str, str]:
         # the server's geo guess, and a page served in °F would be read as °C
         # (90°F silently becoming "90 degrees"). Requesting metric explicitly is
         # the first line of defence; parse_temperature_unit() is the second.
-        "Cookie": "awx_user=tp:C|lang:vi",
+        # The language has to agree with the one in the URL, or the cookie wins
+        # and the page comes back in the other one.
+        "Cookie": f"awx_user=tp:C|lang:{language}",
     }
     if referer:
         headers["Referer"] = referer
     return headers
 
 
+def accept_language(language: str) -> str:
+    """An Accept-Language header preferring `language`, then English."""
+    if language == "vi":
+        return "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+    return "en-US,en;q=0.9"
+
+
 def parse_temperature_unit(html: str) -> str:
     """Return the temperature unit the page was rendered in ("C" or "F")."""
     soup = BeautifulSoup(html, "html.parser")
     temp = soup.select_one(".display-temp")
-    text = temp.get_text(strip=True) if temp else ""
-    if "F" in text.upper():
+    temp_text = temp.get_text(strip=True) if temp else ""
+    if "F" in temp_text.upper():
         return "F"
-    if "C" in text.upper():
+    if "C" in temp_text.upper():
         return "C"
     unit = soup.select_one(".unit")
     unit_text = unit.get_text(strip=True).upper() if unit else ""
@@ -143,12 +168,16 @@ def parse_precipitation_mm(text: str | None) -> float | None:
     return value
 
 
-def parse_wind(wind_text: str | None) -> tuple[float | None, str | None, float | None]:
+def parse_wind(
+    wind_text: str | None, language: str = FALLBACK_LANGUAGE
+) -> tuple[float | None, str | None, float | None]:
     """Parse a wind string into (speed km/h, English cardinal, degrees).
 
     AccuWeather's Vietnamese pages write directions with Vietnamese initials
     ("ĐN" = Đông Nam = southeast), which overlap English letters but mean
-    something different: "N" is Nam (south), not north.
+    something different: "N" is Nam (south), not north. Which alphabet to read
+    first therefore depends on the page: "N 10 km/h" is a southerly on the
+    Vietnamese page and a northerly on the English one.
     """
     if not wind_text:
         return None, None, None
@@ -168,17 +197,29 @@ def parse_wind(wind_text: str | None) -> tuple[float | None, str | None, float |
         except ValueError:
             speed = None
 
-    # Longest match wins so "NĐN" is not truncated to "N". Vietnamese initials
-    # are tried first because they are the ones these pages actually use.
+    # Longest match wins so "NĐN" is not truncated to "N".
+    def read_vietnamese() -> tuple[str, float] | None:
+        match = re.search(r"(?<![A-ZĐ])([BĐNT]{1,3})(?![A-ZĐ])", wind_text)
+        if match and match.group(1) in WIND_DIRECTION_VI:
+            return WIND_DIRECTION_VI[match.group(1)]
+        return None
+
+    def read_english() -> tuple[str, float] | None:
+        match = re.search(r"(?<![A-Z])([NSEW]{1,3})(?![A-Z])", wind_text)
+        if match and match.group(1) in WIND_DIRECTION_EN:
+            return match.group(1), WIND_DIRECTION_EN[match.group(1)]
+        return None
+
+    readers = (
+        (read_vietnamese, read_english)
+        if language == "vi"
+        else (read_english, read_vietnamese)
+    )
     cardinal = degrees = None
-    vi_match = re.search(r"(?<![A-ZĐ])([BĐNT]{1,3})(?![A-ZĐ])", wind_text)
-    if vi_match and vi_match.group(1) in WIND_DIRECTION_VI:
-        cardinal, degrees = WIND_DIRECTION_VI[vi_match.group(1)]
-    else:
-        en_match = re.search(r"(?<![A-Z])([NSEW]{1,3})(?![A-Z])", wind_text)
-        if en_match and en_match.group(1) in WIND_DIRECTION_EN:
-            cardinal = en_match.group(1)
-            degrees = WIND_DIRECTION_EN[cardinal]
+    for reader in readers:
+        if found := reader():
+            cardinal, degrees = found
+            break
 
     return speed, cardinal, degrees
 
@@ -265,11 +306,14 @@ async def _fetch_with_retry(
 
 async def get_location_keys(fetcher: HtmlFetcher, query: str) -> list[tuple[str, str, str]]:
     """Get location keys from AccuWeather."""
+    # Pinned to Vietnamese on purpose, and not to the sensor language: this runs
+    # during setup, before that option exists, and the name picked here becomes
+    # the device name and the URL slug for the life of the entry.
     params = {
         "query": query,
         "language": "vi"
     }
-    headers = get_headers()
+    headers = get_headers(language="vi")
     headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
     
     try:
@@ -417,14 +461,41 @@ def _parse_temp_history(soup: BeautifulSoup, unit: str) -> dict[str, Any]:
     return history
 
 
-def parse_clock_minutes(text: str | None) -> int | None:
-    """Turn "05:33" into minutes since midnight."""
-    if not text:
+def parse_clock_minutes(value: str | None) -> int | None:
+    """Turn "05:33" or "5:33 PM" into minutes since midnight.
+
+    The English pages are rendered on a 12-hour clock, where reading "6:28 PM"
+    as 6:28 would place sunset before sunrise and put a sun icon on the night
+    forecast.
+    """
+    if not value:
         return None
-    match = re.search(r'(\d{1,2}):(\d{2})', str(text))
+    match = re.search(r'(\d{1,2}):(\d{2})\s*([AP]M)?', str(value), re.IGNORECASE)
     if not match:
         return None
-    return int(match.group(1)) * 60 + int(match.group(2))
+    hour = int(match.group(1))
+    meridiem = (match.group(3) or '').upper()
+    if meridiem == 'PM' and hour < 12:
+        hour += 12
+    elif meridiem == 'AM' and hour == 12:
+        hour = 0
+    return hour * 60 + int(match.group(2))
+
+
+def parse_hour_of_day(value: str | None) -> int | None:
+    """Turn an hourly forecast's own label — "14" or "2 PM" — into 0..23."""
+    if not value:
+        return None
+    match = re.search(r'(\d{1,2})\s*([AP]M)?', str(value), re.IGNORECASE)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    meridiem = (match.group(2) or '').upper()
+    if meridiem == 'PM' and hour < 12:
+        hour += 12
+    elif meridiem == 'AM' and hour == 12:
+        hour = 0
+    return hour if 0 <= hour <= 23 else None
 
 
 def night_variant(condition: str | None, is_night: bool) -> str | None:
@@ -449,11 +520,15 @@ def is_night_at(
     return minutes < sunrise or minutes >= sunset
 
 
-async def parse_weather_html(html: str) -> dict[str, Any] | None:
+async def parse_weather_html(
+    html: str, language: str = FALLBACK_LANGUAGE
+) -> dict[str, Any] | None:
     """Parse current weather HTML into normalised values.
 
     Temperatures come back in Celsius regardless of how the page was rendered,
     and wind direction comes back in degrees plus an English cardinal.
+    `language` is the language the page was requested in, which is what its
+    row labels and its clock format follow.
     """
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -500,12 +575,12 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
             if label:
                 realfeel_phrase = label.get_text(strip=True)
 
-        wind_speed, wind_text, wind_deg = parse_wind(details.get('Gió'))
-        gust_speed, _, _ = parse_wind(
-            details.get('Gió giật mạnh') or details.get('Gió giật')
+        wind_speed, wind_text, wind_deg = parse_wind(
+            detail(details, 'wind'), language
         )
+        gust_speed, _, _ = parse_wind(detail(details, 'wind_gusts'), language)
 
-        pressure_raw = details.get('Khí áp') or ''
+        pressure_raw = detail(details, 'pressure') or ''
         pressure_trend = None
         if '↑' in pressure_raw:
             pressure_trend = 'rising'
@@ -522,29 +597,29 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
             'condition': condition,
             'phrase': phrase_val,
             'realfeel': to_celsius(
-                extract_numeric_value(details.get('RealFeel®')), unit
+                extract_numeric_value(detail(details, 'realfeel')), unit
             ),
             'realfeel_phrase': realfeel_phrase,
             'realfeel_shade': to_celsius(
-                extract_numeric_value(details.get('RealFeel Shade™')), unit
+                extract_numeric_value(detail(details, 'realfeel_shade')), unit
             ),
             'heat_index': to_celsius(
-                extract_numeric_value(details.get('Chỉ số nhiệt')), unit
+                extract_numeric_value(detail(details, 'heat_index')), unit
             ),
             'dew_point': to_celsius(
-                extract_numeric_value(details.get('Điểm sương')), unit
+                extract_numeric_value(detail(details, 'dew_point')), unit
             ),
-            'humidity': extract_numeric_value(details.get('Độ ẩm')),
+            'humidity': extract_numeric_value(detail(details, 'humidity')),
             'pressure': extract_numeric_value(pressure_raw),
             'pressure_trend': pressure_trend,
             'wind_speed': wind_speed,
             'wind_bearing': wind_deg,
             'wind_bearing_text': wind_text,
             'wind_gust_speed': gust_speed,
-            'visibility': parse_distance_km(details.get('Tầm nhìn')),
-            'cloud_coverage': extract_numeric_value(details.get('Mật độ mây')),
-            'cloud_ceiling': parse_length_m(details.get('Trần mây')),
-            'uv_index': extract_numeric_value(details.get('Chỉ số UV tối đa')),
+            'visibility': parse_distance_km(detail(details, 'visibility')),
+            'cloud_coverage': extract_numeric_value(detail(details, 'cloud_cover')),
+            'cloud_ceiling': parse_length_m(detail(details, 'cloud_ceiling')),
+            'uv_index': extract_numeric_value(detail(details, 'uv_index')),
             'details': details,
         }
 
@@ -576,12 +651,14 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
                     convert_temp_to_numeric(hd_realfeel.get_text(strip=True)) if hd_realfeel else None,
                     unit,
                 ),
-                'precipitation': parse_precipitation_mm(hd_details.get('Lượng mưa')),
+                'precipitation': parse_precipitation_mm(
+                    detail(hd_details, 'precipitation')
+                ),
                 'thunderstorm_probability': extract_numeric_value(
-                    hd_details.get('Dự báo Dông')
+                    detail(hd_details, 'thunderstorm_probability')
                 ),
                 'precipitation_probability': extract_numeric_value(
-                    hd_details.get('Khả năng dự báo')
+                    detail(hd_details, 'precipitation_probability')
                 ),
                 'details': hd_details,
             }
@@ -596,17 +673,22 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
         return None
 
 
-async def get_current_weather(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any] | None:
+async def get_current_weather(
+    fetcher: HtmlFetcher,
+    location_key: str,
+    location_slug: str,
+    language: str = FALLBACK_LANGUAGE,
+) -> dict[str, Any] | None:
     """Get current weather data (converted from get_weather.py)."""
-    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/current-weather/{location_key}"
-    headers = get_headers()
+    url = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/current-weather/{location_key}"
+    headers = get_headers(language=language)
 
     html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return None
 
     try:
-        data = await parse_weather_html(html)
+        data = await parse_weather_html(html, language)
         if data is None:
             _LOGGER.debug(
                 "get_current_weather: parse returned None (HTML structure changed?). URL: %s",
@@ -618,7 +700,9 @@ async def get_current_weather(fetcher: HtmlFetcher, location_key: str, location_
         return None
 
 
-async def parse_daily_html(html: str) -> list[dict[str, Any]]:
+async def parse_daily_html(
+    html: str, language: str = FALLBACK_LANGUAGE
+) -> list[dict[str, Any]]:
     """Parse daily forecast HTML (converted from get_daily.py)."""
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -686,16 +770,20 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
                 )
                 night['condition'] = map_condition_to_ha(night.get('phrase'))
 
-            wind_speed, wind_text, wind_deg = parse_wind(details.get('Gió'))
-            gust_speed, _, _ = parse_wind(
-                details.get('Gió giật mạnh') or details.get('Gió giật')
+            wind_speed, wind_text, wind_deg = parse_wind(
+                detail(details, 'wind'), language
             )
+            gust_speed, _, _ = parse_wind(detail(details, 'wind_gusts'), language)
 
+            # The two numbers are the same date in a different order: the
+            # Vietnamese page writes 12/8 for 12 August, the English one 8/12.
             day_num = month_num = None
             date_match = re.search(r'(\d{1,2})/(\d{1,2})', date or '')
             if date_match:
-                day_num = int(date_match.group(1))
-                month_num = int(date_match.group(2))
+                first, second = int(date_match.group(1)), int(date_match.group(2))
+                day_num, month_num = (
+                    (second, first) if language == 'en' else (first, second)
+                )
 
             daily.append({
                 'datetime': date,
@@ -707,24 +795,26 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
                 'native_templow': to_celsius(low, unit),
                 'precipitation_probability': precip_val,
                 'precipitation': parse_precipitation_mm(
-                    details.get('Lượng mưa') or details.get('Mưa')
+                    detail(details, 'precipitation')
                 ),
                 'precipitation_hours': extract_numeric_value(
-                    details.get('Tổng số giờ mưa')
+                    detail(details, 'precipitation_hours')
                 ),
-                'humidity': extract_numeric_value(details.get('Độ ẩm')),
+                'humidity': extract_numeric_value(detail(details, 'humidity')),
                 'wind_speed': wind_speed,
                 'wind_bearing': wind_deg,
                 'wind_bearing_text': wind_text,
                 'wind_gust_speed': gust_speed,
-                'cloud_coverage': extract_numeric_value(details.get('Mật độ mây')),
-                'uv_index': extract_numeric_value(details.get('Chỉ số UV tối đa')),
-                'uv_phrase': details.get('Chỉ số UV tối đa'),
+                'cloud_coverage': extract_numeric_value(
+                    detail(details, 'cloud_cover')
+                ),
+                'uv_index': extract_numeric_value(detail(details, 'uv_index')),
+                'uv_phrase': detail(details, 'uv_index'),
                 'realfeel': to_celsius(
-                    extract_numeric_value(details.get('RealFeel®')), unit
+                    extract_numeric_value(detail(details, 'realfeel')), unit
                 ),
                 'realfeel_shade': to_celsius(
-                    extract_numeric_value(details.get('RealFeel Shade™')), unit
+                    extract_numeric_value(detail(details, 'realfeel_shade')), unit
                 ),
                 'night': night or None,
                 'details': details
@@ -735,17 +825,22 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
         return []
 
 
-async def get_daily_forecast(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> list[dict[str, Any]]:
+async def get_daily_forecast(
+    fetcher: HtmlFetcher,
+    location_key: str,
+    location_slug: str,
+    language: str = FALLBACK_LANGUAGE,
+) -> list[dict[str, Any]]:
     """Get daily forecast data (converted from get_daily.py)."""
-    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/daily-weather-forecast/{location_key}"
-    headers = get_headers()
+    url = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/daily-weather-forecast/{location_key}"
+    headers = get_headers(language=language)
 
     html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return []
 
     try:
-        data = await parse_daily_html(html)
+        data = await parse_daily_html(html, language)
         _LOGGER.debug(
             "get_daily_forecast: parsed %d days from %s", len(data), url
         )
@@ -755,7 +850,9 @@ async def get_daily_forecast(fetcher: HtmlFetcher, location_key: str, location_s
         return []
 
 
-async def parse_hourly_html(html: str, day_offset: int = 0) -> list[dict[str, Any]]:
+async def parse_hourly_html(
+    html: str, day_offset: int = 0, language: str = FALLBACK_LANGUAGE
+) -> list[dict[str, Any]]:
     """Parse hourly forecast HTML.
 
     Each hour carries its own epoch timestamp in the element id, which is used
@@ -794,15 +891,16 @@ async def parse_hourly_html(html: str, day_offset: int = 0) -> list[dict[str, An
             if raw_id and str(raw_id).isdigit():
                 timestamp = int(raw_id)
 
+            # "14" on the Vietnamese page, "2 PM" on the English one. The hour
+            # decides whether the forecast gets a night icon, so a label that
+            # does not parse leaves every hour looking like daytime.
             hour_text = hour_el.get_text(strip=True) if hour_el else None
-            hour_num = None
-            if hour_text and hour_text.isdigit():
-                hour_num = int(hour_text)
+            hour_num = parse_hour_of_day(hour_text)
 
-            wind_speed, wind_text, wind_deg = parse_wind(details.get('Gió'))
-            gust_speed, _, _ = parse_wind(
-                details.get('Gió giật') or details.get('Gió giật mạnh')
+            wind_speed, wind_text, wind_deg = parse_wind(
+                detail(details, 'wind'), language
             )
+            gust_speed, _, _ = parse_wind(detail(details, 'wind_gusts'), language)
 
             hourly.append({
                 'timestamp': timestamp,
@@ -823,31 +921,33 @@ async def parse_hourly_html(html: str, day_offset: int = 0) -> list[dict[str, An
                     realfeel_label.get_text(strip=True) if realfeel_label else None
                 ),
                 'realfeel_shade': to_celsius(
-                    extract_numeric_value(details.get('RealFeel Shade™')), unit
+                    extract_numeric_value(detail(details, 'realfeel_shade')), unit
                 ),
                 'heat_index': to_celsius(
-                    extract_numeric_value(details.get('Chỉ số nhiệt')), unit
+                    extract_numeric_value(detail(details, 'heat_index')), unit
                 ),
                 'dew_point': to_celsius(
-                    extract_numeric_value(details.get('Điểm sương')), unit
+                    extract_numeric_value(detail(details, 'dew_point')), unit
                 ),
                 'precipitation_probability': (
                     extract_numeric_value(precip.get_text(strip=True)) if precip else None
                 ),
                 'precipitation': parse_precipitation_mm(
-                    details.get('Mưa') or details.get('Lượng mưa')
+                    detail(details, 'rain_amount')
                 ),
-                'humidity': extract_numeric_value(details.get('Độ ẩm')),
+                'humidity': extract_numeric_value(detail(details, 'humidity')),
                 'wind_speed': wind_speed,
                 'wind_bearing': wind_deg,
                 'wind_bearing_text': wind_text,
                 'wind_gust_speed': gust_speed,
-                'cloud_coverage': extract_numeric_value(details.get('Mật độ mây')),
-                'uv_index': extract_numeric_value(details.get('Chỉ số UV tối đa')),
-                'visibility': parse_distance_km(details.get('Tầm nhìn')),
-                'cloud_ceiling': parse_length_m(details.get('Trần mây')),
-                'air_quality': details.get('Chất lượng không khí'),
-                'brightness': details.get('AccuLumen Brightness Index™'),
+                'cloud_coverage': extract_numeric_value(
+                    detail(details, 'cloud_cover')
+                ),
+                'uv_index': extract_numeric_value(detail(details, 'uv_index')),
+                'visibility': parse_distance_km(detail(details, 'visibility')),
+                'cloud_ceiling': parse_length_m(detail(details, 'cloud_ceiling')),
+                'air_quality': detail(details, 'air_quality'),
+                'brightness': detail(details, 'brightness'),
                 'details': details
             })
         return hourly
@@ -861,6 +961,7 @@ async def get_hourly_forecast(
     location_key: str,
     location_slug: str,
     days: int = HOURLY_DAYS,
+    language: str = FALLBACK_LANGUAGE,
 ) -> list[dict[str, Any]]:
     """Get hourly forecast data.
 
@@ -868,8 +969,8 @@ async def get_hourly_forecast(
     22:00 — so the following days are fetched too. AccuWeather serves day 1..3
     (72 hours) without a subscription.
     """
-    base = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/hourly-weather-forecast/{location_key}"
-    headers = get_headers()
+    base = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/hourly-weather-forecast/{location_key}"
+    headers = get_headers(language=language)
     hours: list[dict[str, Any]] = []
 
     for day in range(1, max(1, days) + 1):
@@ -883,7 +984,9 @@ async def get_hourly_forecast(
             continue
 
         try:
-            parsed = await parse_hourly_html(html, day_offset=day - 1)
+            parsed = await parse_hourly_html(
+                html, day_offset=day - 1, language=language
+            )
         except Exception as e:
             _LOGGER.debug("get_hourly_forecast: %s: %s - %s", type(e).__name__, e, url)
             continue
@@ -1024,10 +1127,19 @@ async def parse_air_html(html: str) -> dict[str, Any]:
         return dict(EMPTY_AIR_QUALITY)
 
 
-async def get_air_quality(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any]:
-    """Get air quality data (converted from get_air.py)."""
-    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/air-quality-index/{location_key}"
-    headers = get_headers()
+async def get_air_quality(
+    fetcher: HtmlFetcher,
+    location_key: str,
+    location_slug: str,
+    language: str = FALLBACK_LANGUAGE,
+) -> dict[str, Any]:
+    """Get air quality data (converted from get_air.py).
+
+    Nothing here is looked up by label, so the category and the advice come back
+    in whatever language the page was asked for.
+    """
+    url = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/air-quality-index/{location_key}"
+    headers = get_headers(language=language)
 
     html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
@@ -1107,14 +1219,22 @@ async def parse_health_html(html: str, group_slug: str = '') -> list[dict[str, A
         return []
 
 
-async def crawl_all_health_activities(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, list[dict[str, Any]]]:
+async def crawl_all_health_activities(
+    fetcher: HtmlFetcher,
+    location_key: str,
+    location_slug: str,
+    language: str = FALLBACK_LANGUAGE,
+) -> dict[str, list[dict[str, Any]]]:
     """Crawl all health activities by category (converted from get_all_health.py).
 
     AccuWeather redesigned the site - all activities are listed on the main
     health-activities page. We crawl that page directly and do NOT fall back
     to individual category subpages (they return 404).
+
+    The page embeds its own JSON, in which `localizedName` and
+    `localizedCategory` are already in the language it was served in.
     """
-    headers = get_headers()
+    headers = get_headers(language=language)
 
     groups: dict[str, list[dict[str, Any]]] = {
         'allergy_health': [],
@@ -1147,7 +1267,7 @@ async def crawl_all_health_activities(fetcher: HtmlFetcher, location_key: str, l
 
     # Chỉ crawl trang health-activities chính, KHÔNG crawl subpages (404)
     try:
-        main_url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/health-activities/{location_key}"
+        main_url = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/health-activities/{location_key}"
         html = await _fetch_with_retry(fetcher, main_url, headers)
         if html:
             activities = await parse_health_html(html, 'health')
@@ -1170,17 +1290,22 @@ async def crawl_all_health_activities(fetcher: HtmlFetcher, location_key: str, l
     return groups
 
 
-async def get_minutecast_data(fetcher: HtmlFetcher, location_key: str, location_slug: str) -> dict[str, Any] | None:
+async def get_minutecast_data(
+    fetcher: HtmlFetcher,
+    location_key: str,
+    location_slug: str,
+    language: str = FALLBACK_LANGUAGE,
+) -> dict[str, Any] | None:
     """Get MinuteCast data (minute-by-minute precipitation forecast)."""
-    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/minute-weather-forecast/{location_key}"
-    headers = get_headers()
+    url = f"{BASE_URL}/{language}/vn/{location_slug}/{location_key}/minute-weather-forecast/{location_key}"
+    headers = get_headers(language=language)
 
     html = await _fetch_with_retry(fetcher, url, headers)
     if html is None:
         return None
 
     try:
-        data = await parse_minutecast_html(html)
+        data = await parse_minutecast_html(html, language)
         _LOGGER.debug(
             "get_minutecast_data: summary='%s' from %s",
             data.get("summary", "")[:50], url
@@ -1191,7 +1316,9 @@ async def get_minutecast_data(fetcher: HtmlFetcher, location_key: str, location_
         return None
 
 
-async def parse_minutecast_html(html: str) -> dict[str, Any]:
+async def parse_minutecast_html(
+    html: str, language: str = FALLBACK_LANGUAGE
+) -> dict[str, Any]:
     """Parse the MinuteCast page.
 
     The page renders 240 minutes even though the headline says "at least 120".
@@ -1254,7 +1381,7 @@ async def parse_minutecast_html(html: str) -> dict[str, Any]:
         )
 
         return {
-            'summary': summary or 'Không có dữ liệu MinuteCast',
+            'summary': summary or text(language, 'minutecast_unavailable'),
             'current_temperature': current_temp,
             'current_condition': current_condition,
             'realfeel': realfeel,
@@ -1269,7 +1396,7 @@ async def parse_minutecast_html(html: str) -> dict[str, Any]:
     except Exception as e:
         _LOGGER.debug("parse_minutecast_html: %s: %s", type(e).__name__, e)
         return {
-            'summary': 'Lỗi phân tích dữ liệu MinuteCast',
+            'summary': text(language, 'minutecast_error'),
             'current_temperature': None,
             'current_condition': None,
             'realfeel': None,
