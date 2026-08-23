@@ -304,8 +304,16 @@ async def _fetch_with_retry(
     return None
 
 
-async def get_location_keys(fetcher: HtmlFetcher, query: str) -> list[tuple[str, str, str]]:
-    """Get location keys from AccuWeather."""
+async def get_location_keys(
+    fetcher: HtmlFetcher, query: str
+) -> list[tuple[str, str, str, str | None]]:
+    """Search locations: key, name, long name and country code for each hit.
+
+    The country code is what the landfall country is derived from. It only
+    appears when the request carries an Accept-Language header, which
+    get_headers always sends; without one AccuWeather answers with a thinner
+    record and the code comes back missing rather than wrong.
+    """
     # Pinned to Vietnamese on purpose, and not to the sensor language: this runs
     # during setup, before that option exists, and the name picked here becomes
     # the device name and the URL slug for the life of the entry.
@@ -324,8 +332,12 @@ async def get_location_keys(fetcher: HtmlFetcher, query: str) -> list[tuple[str,
                 key = item.get("key")
                 name = item.get("localizedName")
                 long_name = item.get("longName")
+                # The long name ends with this same code rather than the
+                # country's name — "Nha Trang, Khánh Hòa, VN" — so the code is
+                # taken from the field that states it outright.
+                country = (item.get("country") or {}).get("id")
                 if key and name:
-                    results.append((key, name, long_name))
+                    results.append((key, name, long_name, country))
             return results
     except Exception as e:
         _LOGGER.debug("get_location_keys: %s: %s", type(e).__name__, e)

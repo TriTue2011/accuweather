@@ -28,6 +28,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     DEFAULT_LANDFALL_COUNTRY,
     DEFAULT_UPDATE_INTERVAL,
+    LANDFALL_COUNTRY_BY_CODE,
     MIN_UPDATE_INTERVAL,
     MAX_UPDATE_INTERVAL,
     SENSOR_LANGUAGE_AUTO,
@@ -67,21 +68,17 @@ def country_selector(hass) -> SelectSelector:
     )
 
 
-def country_of_location(long_name: str | None) -> str:
-    """Which country to watch, taken from the location that was picked.
+def country_for_code(code: str | None) -> str:
+    """Which coast to watch, from the country code of the location picked.
 
-    AccuWeather's autocomplete is asked in Vietnamese and answers "Cầu Giấy, Hà
-    Nội, Việt Nam", so the last part is the country under the same name the
-    coastline data uses. A country with no coast in the tracked basin — or a
-    name that does not match — leaves the default in place, and the person
-    setting up can pick another from the list.
+    The search result states the country as an ISO code — "VN", "TH", "JP" —
+    which is the one part of it that does not move with the language of the
+    query. A country with no coast in the tracked basin, Laos say, has no code
+    here and leaves the default in place for the person setting up to change.
     """
-    if long_name:
-        tail = long_name.split(",")[-1].strip().casefold()
-        for country in landfall_countries():
-            if country.casefold() == tail:
-                return country
-    return DEFAULT_LANDFALL_COUNTRY
+    return LANDFALL_COUNTRY_BY_CODE.get(
+        (code or "").upper(), DEFAULT_LANDFALL_COUNTRY
+    )
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -91,11 +88,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize config flow."""
-        self._locations: list[tuple[str, str, str]] = []
+        self._locations: list[tuple[str, str, str, str | None]] = []
         self._selected_location_key: str = ""
         self._selected_location_name: str = ""
-        # Kept for its country, which is where the landfall option starts from.
-        self._selected_long_name: str = ""
+        # Where the landfall country option starts from.
+        self._selected_country_code: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -141,11 +138,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             selected_location = user_input["location_choice"]
             
             # Find selected location and store for next step
-            for location_key, location_name, long_name in self._locations:
+            for location_key, location_name, long_name, country in self._locations:
                 if f"{location_key}|{location_name}" == selected_location:
                     self._selected_location_key = location_key
                     self._selected_location_name = location_name
-                    self._selected_long_name = long_name or ""
+                    self._selected_country_code = country
                     
                     # Move to update interval configuration
                     return await self.async_step_update_interval()
@@ -154,7 +151,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         # Create options for location selection
         location_options = {}
-        for location_key, location_name, long_name in self._locations:
+        for location_key, location_name, long_name, _country in self._locations:
             display_name = f"{location_name} ({long_name})" if long_name else location_name
             location_options[f"{location_key}|{location_name}"] = display_name
         
@@ -199,7 +196,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ): vol.All(vol.Coerce(int), vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL)),
             vol.Optional(
                 CONF_LANDFALL_COUNTRY,
-                default=country_of_location(self._selected_long_name),
+                default=country_for_code(self._selected_country_code),
             ): country_selector(self.hass),
         })
         

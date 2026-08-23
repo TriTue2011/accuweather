@@ -5,7 +5,7 @@ DOMAIN = "accuweather"
 # Shown on the device page. Keep VERSION in step with manifest.json — the device
 # page used to advertise 2026.4.22 while the manifest had moved on.
 MANUFACTURER = "TriTue2011"
-VERSION = "2026.8.23"
+VERSION = "2026.8.23.1"
 
 # Config flow
 CONF_LOCATION_KEY = "location_key"
@@ -255,6 +255,40 @@ COUNTRY_NAME_EN: dict[str, str] = {
     "Đông Timor": "Timor-Leste",
     "Úc": "Australia",
     "Ấn Độ": "India",
+}
+
+# AccuWeather country code -> the name the coastline data uses. The search
+# result carries the country as an ISO code, which is the one part of it that
+# does not change with the language of the query: the same country came back as
+# "Philippin" in Vietnamese and "Philippines" in English, and only "PH" is the
+# same either way. Countries with no coast in the tracked basin are absent on
+# purpose — there is no landfall to watch for there.
+LANDFALL_COUNTRY_BY_CODE: dict[str, str] = {
+    "AU": "Úc",
+    "BD": "Bangladesh",
+    "BN": "Brunei",
+    "CN": "Trung Quốc",
+    "FM": "Micronesia",
+    "GU": "Guam",
+    "HK": "Hồng Kông",
+    "ID": "Indonesia",
+    "IN": "Ấn Độ",
+    "JP": "Nhật Bản",
+    "KH": "Campuchia",
+    "KP": "Triều Tiên",
+    "KR": "Hàn Quốc",
+    "MM": "Myanmar",
+    "MP": "Quần đảo Bắc Mariana",
+    "MY": "Malaysia",
+    "PG": "Papua New Guinea",
+    "PH": "Philippines",
+    "PW": "Palau",
+    "RU": "Nga",
+    "SG": "Singapore",
+    "TH": "Thái Lan",
+    "TL": "Đông Timor",
+    "TW": "Đài Loan",
+    "VN": VIETNAM,
 }
 
 # English cardinals -> degrees, in case a page is served in English.
