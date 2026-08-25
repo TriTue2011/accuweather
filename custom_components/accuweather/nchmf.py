@@ -40,6 +40,30 @@ VIETNAM_TZ = timezone(timedelta(hours=7))
 # page keeps months of old entries below the fresh ones.
 RECENT_HOURS = 24
 
+# The bulletin body, on the page the list links to. The list itself carries only
+# headlines, and a headline like "TIN BÃO TRÊN BIỂN ĐÔNG" says nothing about
+# where the storm is or how strong it has become.
+_BODY_OPEN = '<div class="text-content-news">'
+
+# Where the bulletin text ends and the page furniture begins: a PDF link, share
+# buttons, a list of other bulletins.
+_BODY_STOP = ("Chi tiết tin", "Tin mới", "Tin cùng chuyên mục")
+
+# Forecast tables flatten into an unreadable run of numbers, so they are marked
+# rather than inlined. The prose around them carries the situation itself.
+_TABLE_MARK = "[bảng]"
+
+# Enough for the opening paragraph of a bulletin, which is the part that says
+# what is happening; the rest stays in `content`.
+SUMMARY_MAX = 300
+
+# A cap on the stored body. Attributes are written to the recorder every time
+# they change, and nobody reads a five-page warning off a dashboard tile.
+CONTENT_MAX = 3000
+
+# The official PDF of the bulletin, when the page links one.
+_PDF = re.compile(r'href="([^"]+\.pdf)"', re.IGNORECASE)
+
 # One list entry: the link, its title, and the issue time in the trailing span.
 _ENTRY = re.compile(
     r'<div class="text-weather-location[^"]*">\s*<a href="([^"]+)">(.*?)'
@@ -72,6 +96,11 @@ EMPTY: dict[str, Any] = {
     "source": NCHMF_URL,
 }
 
+_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "vi-VN,vi;q=0.9",
+}
+
 _CACHE: tuple[float, dict[str, Any]] | None = None
 
 
@@ -86,6 +115,11 @@ def _clean(raw: str) -> str:
     """
     text = re.sub(r"\s+", " ", unescape(_TAGS.sub("", raw))).strip()
     return unicodedata.normalize("NFC", text)
+
+
+def _clean_multiline(raw: str) -> str:
+    """Unescape and normalise a block of text, keeping its line breaks."""
+    return unicodedata.normalize("NFC", unescape(raw))
 
 
 def _issued(raw: str) -> tuple[str | None, float | None]:
@@ -106,6 +140,75 @@ def _category(title: str) -> str:
         if any(word in upper for word in keywords):
             return name
     return "khác"
+
+
+def _shorten(text: str, limit: int) -> str:
+    """Cut to `limit` characters on a word boundary, marking the cut."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:.")
+    return f"{cut}…"
+
+
+def _summarise(text: str, limit: int) -> str:
+    """Cut to whole sentences, so the summary never trails off mid-heading.
+
+    A bulletin's opening paragraph is often shorter than the limit, and a plain
+    character cut then drags in the start of the next section heading. Ending
+    on the last full stop reads as a finished thought instead.
+    """
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    # Bulletins number their sections "1.", "2.", "3.", and the dot after a bare
+    # number is not the end of a sentence — cutting there leaves the summary
+    # trailing off on a section number that says nothing.
+    end = -1
+    for match in re.finditer(r"\.(?=[ \n])", window):
+        if re.search(r"(?:^|[ \n])\d{1,2}$", window[: match.start()]):
+            continue
+        end = match.start()
+    # Only if a sentence actually ends late enough to be worth reading; a very
+    # early full stop would throw away most of what was asked for.
+    if end >= limit // 2:
+        return window[: end + 1]
+    return _shorten(text, limit)
+
+
+def parse_content(page: str) -> dict[str, Any]:
+    """The body of one bulletin: a short summary, the full text, the PDF link.
+
+    Returns empty strings when the body cannot be found, so a page that changes
+    shape costs the summary and nothing else.
+    """
+    start = page.find(_BODY_OPEN)
+    if start < 0:
+        return {"summary": "", "content": "", "pdf_url": None}
+
+    body = page[start:]
+    pdf = _PDF.search(body)
+    body = re.sub(r"<table.*?</table>", f"\n{_TABLE_MARK}\n", body, flags=re.S | re.I)
+    body = re.sub(r"<(script|style|iframe).*?</\1>", " ", body, flags=re.S | re.I)
+    # Block ends become line breaks before the tags go, so sentences that sat in
+    # separate paragraphs do not run together into one.
+    body = re.sub(r"<br\s*/?>|</p>|</div>|</h\d>", "\n", body, flags=re.I)
+    body = _clean_multiline(_TAGS.sub("", body))
+
+    lines: list[str] = []
+    for raw in body.split("\n"):
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            continue
+        if any(line.startswith(stop) for stop in _BODY_STOP):
+            break
+        lines.append(line)
+
+    prose = [line for line in lines if line != _TABLE_MARK]
+    return {
+        "summary": _summarise(" ".join(prose), SUMMARY_MAX),
+        "content": _shorten("\n".join(lines), CONTENT_MAX),
+        "pdf_url": pdf.group(1) if pdf else None,
+    }
 
 
 def parse_bulletins(page: str) -> list[dict[str, Any]]:
@@ -132,6 +235,38 @@ def parse_bulletins(page: str) -> list[dict[str, Any]]:
     return bulletins
 
 
+async def _add_content(fetcher: HtmlFetcher, bulletin: dict[str, Any]) -> None:
+    """Attach the bulletin body to its list entry, in place.
+
+    Failure is quiet and partial on purpose: the headline, the issue time and
+    the link are already known and worth showing on their own, so a body that
+    cannot be read leaves empty strings rather than losing the bulletin.
+    """
+    bulletin.setdefault("summary", "")
+    bulletin.setdefault("content", "")
+    bulletin.setdefault("pdf_url", None)
+
+    url = bulletin.get("url")
+    if not url:
+        return
+    try:
+        status, page = await fetcher.get_text(url, _HEADERS)
+    except Exception as err:  # noqa: BLE001 - the list is worth keeping
+        _LOGGER.debug("NCHMF bulletin body failed: %s: %s", type(err).__name__, err)
+        return
+    if status != 200 or not page:
+        _LOGGER.debug("NCHMF bulletin body returned HTTP %s", status)
+        return
+
+    content = parse_content(page)
+    if not content["content"]:
+        _LOGGER.debug(
+            "NCHMF bulletin fetched but no body parsed — the markup has "
+            "probably changed"
+        )
+    bulletin.update(content)
+
+
 async def get_bulletins(fetcher: HtmlFetcher) -> dict[str, Any]:
     """Fetch and parse the hazardous-weather list.
 
@@ -147,13 +282,7 @@ async def get_bulletins(fetcher: HtmlFetcher) -> dict[str, Any]:
 
     result = dict(EMPTY)
     try:
-        status, page = await fetcher.get_text(
-            NCHMF_URL,
-            {
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "vi-VN,vi;q=0.9",
-            },
-        )
+        status, page = await fetcher.get_text(NCHMF_URL, _HEADERS)
         if status != 200 or not page:
             _LOGGER.debug("NCHMF returned HTTP %s", status)
         else:
@@ -164,6 +293,10 @@ async def get_bulletins(fetcher: HtmlFetcher) -> dict[str, Any]:
                     "probably changed"
                 )
             else:
+                # Only the newest bulletin's body is fetched. Ten more requests
+                # per update on a government site would be rude, and nobody
+                # reads the body of an archived warning off a dashboard.
+                await _add_content(fetcher, bulletins[0])
                 result = {
                     "available": True,
                     "count": len(bulletins),

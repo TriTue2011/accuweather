@@ -28,13 +28,16 @@ from .const import (
     COAST_LOOKUP_MAX_KM,
     COUNTRY_NAME_EN,
     DEFAULT_LANDFALL_COUNTRY,
+    LANDFALL_HORIZON_HOURS,
     LANDFALL_MAX_STEPS,
     LANDFALL_MODEL_PRIORITY,
     LANDFALL_OBSERVED_KM,
+    LANDFALL_RANGE_KM,
     LANDFALL_REFINE_KM,
     LANDFALL_RECENT_HOURS,
     LANDFALL_STEP_KM,
     LANDFALL_THRESHOLD_KM,
+    MARITIME_ZONE_KM,
     STORM_NEARBY_RADIUS_KM,
     STORM_SLOTS,
     VIETNAM,
@@ -1070,6 +1073,33 @@ def _measure_landfall(
     landfall["time_text"] = local_time_text(landfall.get("time"))
 
 
+def _beyond_horizon(landfall: dict[str, Any] | None) -> bool:
+    """Whether a crossing is too far off in both time and distance to report.
+
+    Either being close enough is sufficient: a storm two days out matters even
+    from 1500 km away, and one 400 km off the coast matters even if it is
+    crawling and takes four days to arrive. Only when both fail is the estimate
+    speculation rather than a warning.
+
+    A crossing that has already happened has negative hours and passes on time,
+    which is what should happen: a storm that came ashore yesterday is news.
+    """
+    if not landfall:
+        return False
+
+    hours = landfall.get("hours_away")
+    if hours is not None and hours <= LANDFALL_HORIZON_HOURS:
+        return False
+
+    distance = landfall.get("distance_from_storm_km")
+    if distance is not None and distance <= LANDFALL_RANGE_KM:
+        return False
+
+    # Neither figure available means neither gate can pass it. Saying nothing
+    # is the safer failure for a warning.
+    return True
+
+
 async def _add_storm_detail(
     session: aiohttp.ClientSession,
     storm: dict[str, Any],
@@ -1155,6 +1185,29 @@ async def _add_storm_detail(
         storm.get("distance_to_coast_km"),
         language=language,
     )
+
+    # Has the storm entered that country's waters yet? Answered from the
+    # distance to its coast, which stands in for an EEZ boundary — see
+    # MARITIME_ZONE_KM. None when the storm is nowhere near the country at all.
+    to_watched_coast = None
+    if storm.get("latitude") is not None and storm.get("longitude") is not None:
+        _, to_watched_coast = nearest_coast_in(
+            country, storm["latitude"], storm["longitude"]
+        )
+    storm["distance_to_watched_coast_km"] = to_watched_coast
+    storm["in_maritime_zone"] = (
+        to_watched_coast is not None and to_watched_coast <= MARITIME_ZONE_KM
+    )
+
+    # A crossing too far off in time AND too far away in space is a model's
+    # guess about next week, not a warning worth a sensor state. It is kept
+    # rather than dropped, under a name the sensor reports separately, so a
+    # dashboard can still show "something may be coming" without the main line
+    # naming a province and an hour it cannot stand behind.
+    beyond = _beyond_horizon(watched)
+    storm["landfall_watched_beyond"] = watched if beyond else None
+    if beyond:
+        watched = None
 
     storm["landfall_watched"] = watched
     # The landfall sensor is read on its own, so this line carries the name of

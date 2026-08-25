@@ -109,6 +109,24 @@ LANDFALL_STEP_KM = 15
 # update. 40 steps covers a 600 km jump, the worst seen in the JMA tail.
 LANDFALL_MAX_STEPS = 40
 
+# How far ahead a landfall on the watched coast is worth announcing. Past this
+# the track is a model's guess about next week, not a warning: measured on the
+# live feed, a six-day estimate came from one model out of three and put the
+# storm 2700 km from the coast it supposedly hits.
+LANDFALL_HORIZON_HOURS = 72
+
+# The other half of the same gate. A storm still this far from the crossing has
+# not committed to it, whatever its track says — but one closer than this is
+# worth reporting even if it is slow enough to be more than three days out.
+# Either condition is enough; both failing is what silences the estimate.
+LANDFALL_RANGE_KM = 1000
+
+# An exclusive economic zone reaches 200 nautical miles from the baseline. Real
+# EEZ polygons are a dataset of their own, but the distance from a storm to a
+# country's coast is already measured here, so this is the usable stand-in for
+# "has it entered that country's waters yet".
+MARITIME_ZONE_KM = 370
+
 # Beyond this there is no land in the tracked basin, so no landfall is guessed.
 # Naming a coast 3000 km away told people nothing except that the answer was
 # forced: a storm off Tokyo was reported against the coast of Quảng Ninh.

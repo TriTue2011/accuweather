@@ -30,6 +30,8 @@ from .const import (
     LANDFALL_MODEL_PRIORITY,
     LANGUAGE_FOR_ENTITY_IDS,
     SENSOR_LANGUAGE_AUTO,
+    LANDFALL_HORIZON_HOURS,
+    LANDFALL_RANGE_KM,
     STORM_SLOTS,
     STORM_TRACK_POINTS,
 )
@@ -801,6 +803,15 @@ class AccuWeatherBulletinSensor(
             "issued": latest.get("issued"),
             "issued_text": latest.get("issued_text"),
             "url": latest.get("url"),
+            # What the bulletin actually says. The headline names the hazard;
+            # only the body says where the storm is, how strong it has become
+            # and which provinces are in the way. `summary` is the opening
+            # paragraph, sized for a dashboard tile; `content` is the whole
+            # text with the forecast tables marked but not inlined.
+            "summary": latest.get("summary") or "",
+            "content": latest.get("content") or "",
+            # The official PDF of the bulletin, when the page links one.
+            "pdf_url": latest.get("pdf_url"),
             # "bão", "lũ", "biển", "mưa", "nắng nóng", "rét" or "khác", so an
             # automation can act on storms alone.
             "category": latest.get("category"),
@@ -952,6 +963,45 @@ class AccuWeatherStormSummarySensor(
             # reading only the sentence would never learn about the second.
             attrs["landfall_count"] = len(inbound)
             attrs["landfall_storms"] = [landfall_summary(s) for s in inbound]
+            # Estimates held back for being both more than LANDFALL_HORIZON_HOURS
+            # off and more than LANDFALL_RANGE_KM away. Kept visible so the
+            # sensor going quiet is legible rather than mysterious, but out of
+            # the sentence, which should not name a province and an hour on the
+            # strength of one model's guess about next week.
+            distant = [
+                s for s in storms.get("storms") or ()
+                if s.get("landfall_watched_beyond")
+            ]
+            attrs["landfall_beyond_horizon"] = [
+                {
+                    "name": s.get("name"),
+                    "province": (s["landfall_watched_beyond"]).get("province"),
+                    "time_text": (s["landfall_watched_beyond"]).get("time_text"),
+                    "hours_away": (s["landfall_watched_beyond"]).get("hours_away"),
+                    "distance_to_landfall_km": (
+                        (s["landfall_watched_beyond"]).get("distance_from_storm_km")
+                    ),
+                    "models_agreeing": (
+                        (s["landfall_watched_beyond"]).get("models_agreeing")
+                    ),
+                    "models_total": (
+                        (s["landfall_watched_beyond"]).get("models_total")
+                    ),
+                }
+                for s in distant
+            ]
+            # Which storms are inside the watched country's waters right now —
+            # a 200-nautical-mile stand-in for its exclusive economic zone.
+            attrs["storms_in_maritime_zone"] = [
+                {
+                    "name": s.get("name"),
+                    "distance_to_coast_km": s.get("distance_to_watched_coast_km"),
+                }
+                for s in storms.get("storms") or ()
+                if s.get("in_maritime_zone")
+            ]
+            attrs["landfall_horizon_hours"] = LANDFALL_HORIZON_HOURS
+            attrs["landfall_range_km"] = LANDFALL_RANGE_KM
         else:
             storm = storms.get("nearest") or {}
             landfall = storm.get("landfall")
