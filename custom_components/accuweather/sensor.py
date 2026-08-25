@@ -1012,6 +1012,10 @@ class AccuWeatherStormSummarySensor(
                     "distance_to_landfall_km": (
                         (s["landfall_watched_beyond"]).get("distance_from_storm_km")
                     ),
+                    # Chính con số cổng chặn đã so, nên đọc là biết vì sao ước
+                    # lượng này bị giữ lại. Không có nó thì chỉ thấy khoảng cách
+                    # tới điểm đổ bộ — một số liệu khác, không phải lý do.
+                    "distance_to_coast_km": s.get("distance_to_watched_coast_km"),
                     "models_agreeing": (
                         (s["landfall_watched_beyond"]).get("models_agreeing")
                     ),

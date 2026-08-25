@@ -208,7 +208,7 @@ trang và cứ bốn lượt lại có tám trang.
 | `landfall_models_agreeing` / `landfall_models_total` | Bao nhiêu mô hình cùng cho ra điểm cắt bờ |
 | `landfall_spread_km` · `landfall_spread_hours` · `landfall_places` | Các mô hình lệch nhau bao xa, bao lâu, và nêu những khúc bờ nào |
 | `landfall_count` · `landfall_storms` | Tổng số cơn sắp vào bờ và danh sách từng cơn |
-| `landfall_beyond_horizon` | Ước lượng bị giữ lại vì còn quá xa và quá lâu |
+| `landfall_beyond_horizon` | Ước lượng bị giữ lại vì trượt cả hai điều kiện, kèm `distance_to_coast_km` là chính con số cổng chặn đã so |
 | `storms_in_maritime_zone` | Các cơn đang trong 370 km tính từ bờ nước đó — để nhìn, không tham gia cổng chặn |
 | `landfall_horizon_hours` · `landfall_range_km` | Hai ngưỡng đang đặt ở đâu: 72 giờ, và 1000 km từ bão tới bờ nước đang theo dõi |
 
