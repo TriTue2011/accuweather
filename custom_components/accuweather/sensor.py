@@ -749,17 +749,21 @@ class AccuWeatherBulletinSensor(
 ):
     """The latest hazardous-weather bulletin from Việt Nam's forecast centre.
 
-    The state is the opening paragraph of the bulletin — where the storm is, how
-    strong it has become, which way it is going. The headline names the hazard
-    but says none of that, and it is not reachable any other way: recent Home
-    Assistant versions dropped the attribute list from the more-info dialog, so
-    clicking the entity shows only history and the logbook. An attribute nobody
-    can see is not an answer, so the half worth reading is the half read out.
-    The headline is kept as the `title` attribute.
+    The state is the headline and then the opening paragraph, because neither
+    alone is enough. The headline says what kind of warning this is; the
+    paragraph says where the storm is, how strong it has become and which way
+    it is going, and it usually opens on a section heading like "1. Hiện trạng
+    đã qua:" that names nothing.
 
-    A paragraph longer than a state may be is trimmed here and nowhere else:
-    `summary` still carries it whole, and `content` carries the entire bulletin,
-    for a Markdown card or a template that has room for them.
+    Both go in the state rather than one going in an attribute because recent
+    Home Assistant versions dropped the attribute list from the more-info
+    dialog: clicking the entity shows history and the logbook and nothing else,
+    so an attribute is only reachable from Developer Tools or a template. An
+    attribute nobody can see is not an answer.
+
+    What will not fit in a state is trimmed here and nowhere else: `title` and
+    `summary` keep their own text whole, and `content` carries the entire
+    bulletin, for a Markdown card or a template that has room for them.
 
     Deliberately not a count: the page keeps months of old bulletins below the
     current ones, so the number barely moves and would never trigger anything.
@@ -795,19 +799,24 @@ class AccuWeatherBulletinSensor(
 
     @property
     def native_value(self) -> str | None:
-        """What the most recent bulletin says, in one paragraph.
+        """The headline of the most recent bulletin, and what it says.
 
-        Falls back to the headline when the body could not be fetched: naming
-        the hazard is more use than an empty tile, and the list page is a
-        separate request that may well have succeeded on its own.
+        Either half on its own leaves a question: the headline does not say
+        where the storm is, and the paragraph does not say what kind of warning
+        it belongs to. Whichever half is missing, the other stands alone — the
+        list page and the bulletin page are separate requests, and one failing
+        does not mean the other did.
         """
         latest = self._bulletins.get("latest") or {}
-        value = latest.get("summary") or latest.get("title")
-        if not value:
+        parts = [part for part in (latest.get("title"), latest.get("summary")) if part]
+        if not parts:
             return text(self.coordinator.language, "bulletin_none")
+
+        value = " — ".join(parts)
         # Home Assistant refuses a state over 255 characters and drops the
         # entity rather than truncating, so the trimming happens here, on a
-        # word boundary. The `summary` attribute keeps the whole paragraph.
+        # word boundary. The headline comes first so it always survives; the
+        # `summary` attribute keeps the paragraph whole either way.
         if len(value) <= MAX_STATE_LENGTH:
             return value
         return value[: MAX_STATE_LENGTH - 1].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…"
