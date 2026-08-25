@@ -280,7 +280,12 @@ def _country_of(place: str | None) -> str | None:
 # Margin added to each country's own bounding box. A track point further
 # outside than this cannot be within the landfall threshold of that coast, and
 # 2 degrees is about 220 km at these latitudes.
-_BOX_MARGIN_DEGREES = 2.0
+# Hộp bao chỉ để loại nhanh điểm ở xa trước khi đo từng điểm bờ, nên lề của nó
+# PHẢI rộng hơn bán kính lớn nhất từng hỏi tới — hiện là MARITIME_ZONE_KM (370
+# km ≈ 3,33°). Để lề 2° thì bão cách bờ 222–370 km rơi ra ngoài hộp, hàm trả về
+# "không rõ", và cờ vùng biển đọc thành "ngoài vùng biển" — đúng dải mà bão tiến
+# vào Việt Nam từ phía đông đi qua. 4° ≈ 444 km, còn dư chỗ.
+_BOX_MARGIN_DEGREES = 4.0
 
 _COUNTRY_COAST: dict[str, list[tuple[str, float, float]]] = {}
 _COUNTRY_BOX: dict[str, tuple[float, float, float, float]] = {}
