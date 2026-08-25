@@ -61,12 +61,24 @@ vòng qua Philippines rồi mới sang Việt Nam vẫn tính đúng: điểm c�
 - **Nói rõ các mô hình đồng thuận tới đâu.** Mọi mô hình có quỹ đạo đều được dò
   điểm cắt bờ, không chỉ mô hình tin cậy nhất. Câu trạng thái ghi thẳng „3/3 mô
   hình cùng hướng, lệch 95 km" hoặc „chỉ 1/3 mô hình cho vào bờ"
-- **Chỉ báo khi bão đã đến đủ gần**: đổ bộ trong vòng **72 giờ** HOẶC bão còn
-  cách điểm đổ bộ dưới **1000 km**. Một trong hai là đủ — cơn hai ngày nữa vào
-  bờ vẫn đáng lo dù ở xa 1500 km, cơn còn 400 km vẫn đáng lo dù đi chậm mất bốn
-  ngày. Bão đã đổ bộ rồi luôn được báo
+- **Chỉ báo khi bão đã đến đủ gần.** Một trong ba điều kiện là đủ, mỗi điều
+  kiện bắt một trường hợp hai cái kia bỏ sót:
+  - đổ bộ **trong vòng 72 giờ** — cơn hai ngày nữa vào bờ vẫn đáng lo dù đang ở
+    xa 1500 km;
+  - bão còn **cách điểm đổ bộ dưới 1000 km** — cơn chỉ còn 400 km vẫn đáng lo dù
+    đi chậm mất bốn ngày;
+  - bão **đã ở trong vùng biển nước đó** (370 km tính từ bờ). Đây là điều kiện
+    hai cái trên bỏ sót: cơn lởn vởn ngoài khơi rồi vòng lại mới vào bờ có quỹ
+    đạo dài và giờ đổ bộ xa, trượt cả hai ngưỡng kia — nhưng nó đang ở ngay
+    ngoài khơi nhà bạn, không phải lúc để cảm biến im lặng.
+
+  Bão đã đổ bộ rồi luôn được báo.
 - **Nhiều cơn cùng hướng vào một nước** thì các cơn còn lại nằm ở `landfall_count`
   và `landfall_storms`, xếp theo thứ tự vào bờ
+- **Cơn nào đang trong vùng biển** thì nằm ở `storms_in_maritime_zone` kèm
+  khoảng cách tới bờ, kể cả khi nó không có dự báo đổ bộ nào — nhờ vậy phân biệt
+  được „không có bão đổ bộ" với „không có bão đổ bộ nhưng có một cơn còn ngoài
+  khơi cách bờ 200 km"
 
 Ví dụ câu trạng thái:
 

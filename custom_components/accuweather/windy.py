@@ -1073,18 +1073,32 @@ def _measure_landfall(
     landfall["time_text"] = local_time_text(landfall.get("time"))
 
 
-def _beyond_horizon(landfall: dict[str, Any] | None) -> bool:
-    """Whether a crossing is too far off in both time and distance to report.
+def _beyond_horizon(
+    landfall: dict[str, Any] | None, in_maritime_zone: bool = False
+) -> bool:
+    """Whether a crossing is too far off in every sense to be worth reporting.
 
-    Either being close enough is sufficient: a storm two days out matters even
-    from 1500 km away, and one 400 km off the coast matters even if it is
-    crawling and takes four days to arrive. Only when both fail is the estimate
-    speculation rather than a warning.
+    Any one of three things being close enough is sufficient, and each catches a
+    case the others miss:
+
+    * **Time** — a storm two days out matters even from 1500 km away.
+    * **Distance to the crossing** — one 400 km from where it comes ashore
+      matters even if it is crawling and takes four days to get there.
+    * **Already in the country's waters** — and this is the one the first two
+      miss. A storm sitting off the coast that will loop before coming ashore
+      has a long track and a distant landfall time, so both figures above fail
+      it; but it is in your waters right now, and that is not something to go
+      quiet about. `MARITIME_ZONE_KM` is what "in your waters" means here.
+
+    Only when all three fail is the estimate speculation rather than a warning.
 
     A crossing that has already happened has negative hours and passes on time,
     which is what should happen: a storm that came ashore yesterday is news.
     """
     if not landfall:
+        return False
+
+    if in_maritime_zone:
         return False
 
     hours = landfall.get("hours_away")
@@ -1095,8 +1109,8 @@ def _beyond_horizon(landfall: dict[str, Any] | None) -> bool:
     if distance is not None and distance <= LANDFALL_RANGE_KM:
         return False
 
-    # Neither figure available means neither gate can pass it. Saying nothing
-    # is the safer failure for a warning.
+    # No figure available means no gate can pass it. Saying nothing is the safer
+    # failure for a warning.
     return True
 
 
@@ -1204,7 +1218,7 @@ async def _add_storm_detail(
     # rather than dropped, under a name the sensor reports separately, so a
     # dashboard can still show "something may be coming" without the main line
     # naming a province and an hour it cannot stand behind.
-    beyond = _beyond_horizon(watched)
+    beyond = _beyond_horizon(watched, storm["in_maritime_zone"])
     storm["landfall_watched_beyond"] = watched if beyond else None
     if beyond:
         watched = None
