@@ -749,11 +749,17 @@ class AccuWeatherBulletinSensor(
 ):
     """The latest hazardous-weather bulletin from Việt Nam's forecast centre.
 
-    The state is the opening paragraph of the bulletin — where the storm is,
-    how strong it has become, which way it is going. The headline names the
-    hazard but says none of that, and an attribute is invisible on a default
-    dashboard card, so the half worth reading is the half that gets read out.
+    The state is the opening paragraph of the bulletin — where the storm is, how
+    strong it has become, which way it is going. The headline names the hazard
+    but says none of that, and it is not reachable any other way: recent Home
+    Assistant versions dropped the attribute list from the more-info dialog, so
+    clicking the entity shows only history and the logbook. An attribute nobody
+    can see is not an answer, so the half worth reading is the half read out.
     The headline is kept as the `title` attribute.
+
+    A paragraph longer than a state may be is trimmed here and nowhere else:
+    `summary` still carries it whole, and `content` carries the entire bulletin,
+    for a Markdown card or a template that has room for them.
 
     Deliberately not a count: the page keeps months of old bulletins below the
     current ones, so the number barely moves and would never trigger anything.
@@ -799,12 +805,12 @@ class AccuWeatherBulletinSensor(
         value = latest.get("summary") or latest.get("title")
         if not value:
             return text(self.coordinator.language, "bulletin_none")
-        # Home Assistant refuses a state over 255 characters, and drops the
-        # entity rather than truncating. Summaries are cut to fit upstream;
-        # this is the guard for a headline that runs long.
-        return value if len(value) <= MAX_STATE_LENGTH else (
-            value[: MAX_STATE_LENGTH - 1] + "…"
-        )
+        # Home Assistant refuses a state over 255 characters and drops the
+        # entity rather than truncating, so the trimming happens here, on a
+        # word boundary. The `summary` attribute keeps the whole paragraph.
+        if len(value) <= MAX_STATE_LENGTH:
+            return value
+        return value[: MAX_STATE_LENGTH - 1].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -812,9 +818,9 @@ class AccuWeatherBulletinSensor(
         bulletins = self._bulletins
         latest = bulletins.get("latest") or {}
         attrs: dict[str, Any] = {
-            # The headline. It used to be the state; the paragraph the state
-            # carries now is the more useful half, but the headline is what
-            # names the kind of warning, so it stays reachable.
+            # The headline. The state carries the paragraph instead, because
+            # that is the half worth reading, but the headline is what names
+            # the kind of warning, so it stays reachable for templates.
             "title": latest.get("title"),
             "issued": latest.get("issued"),
             "issued_text": latest.get("issued_text"),

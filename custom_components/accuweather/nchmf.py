@@ -45,18 +45,29 @@ RECENT_HOURS = 24
 # where the storm is or how strong it has become.
 _BODY_OPEN = '<div class="text-content-news">'
 
-# Where the bulletin text ends and the page furniture begins: a PDF link, share
-# buttons, a list of other bulletins.
+# Where the bulletin text ends and the page furniture begins. Cut in the markup
+# first: the text markers below only appear on bulletins that link a PDF, and a
+# bulletin without one used to run straight on into the image-popup markup and
+# end its summary on the modal's close button.
+_BODY_END = (
+    '<div id="modalShowImage"',
+    "<!-------------POP UP",
+    "<!-- Load Facebook SDK",
+    'class="list-social"',
+)
+
+# The same boundary at the text level, for a page whose markup shifts again.
 _BODY_STOP = ("Chi tiết tin", "Tin mới", "Tin cùng chuyên mục")
 
 # Forecast tables flatten into an unreadable run of numbers, so they are marked
 # rather than inlined. The prose around them carries the situation itself.
 _TABLE_MARK = "[bảng]"
 
-# The summary is what the sensor reads out, and Home Assistant refuses a state
-# longer than 255 characters — it drops the entity rather than truncating. So
-# this is that limit, not a display preference. The rest stays in `content`.
-SUMMARY_MAX = 255
+# Enough for the opening paragraph of a bulletin, which is the part that says
+# what is happening; the rest stays in `content`. Deliberately more than the
+# 255 a Home Assistant state allows: the sensor trims its own state to fit, and
+# the attribute keeps the whole paragraph for anything reading it directly.
+SUMMARY_MAX = 300
 
 # A cap on the stored body. Attributes are written to the recorder every time
 # they change, and nobody reads a five-page warning off a dashboard tile.
@@ -187,6 +198,11 @@ def parse_content(page: str) -> dict[str, Any]:
         return {"summary": "", "content": "", "pdf_url": None}
 
     body = page[start:]
+    end = min(
+        (found for marker in _BODY_END if (found := body.find(marker)) > 0),
+        default=len(body),
+    )
+    body = body[:end]
     pdf = _PDF.search(body)
     body = re.sub(r"<table.*?</table>", f"\n{_TABLE_MARK}\n", body, flags=re.S | re.I)
     body = re.sub(r"<(script|style|iframe).*?</\1>", " ", body, flags=re.S | re.I)
@@ -202,6 +218,11 @@ def parse_content(page: str) -> dict[str, Any]:
             continue
         if any(line.startswith(stop) for stop in _BODY_STOP):
             break
+        # Page furniture that survives the cuts above is punctuation on its own
+        # — a close button, a bullet, a separator. A line of a bulletin always
+        # has a word in it.
+        if not any(char.isalnum() for char in line):
+            continue
         lines.append(line)
 
     prose = [line for line in lines if line != _TABLE_MARK]
