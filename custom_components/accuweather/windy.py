@@ -280,12 +280,14 @@ def _country_of(place: str | None) -> str | None:
 # Margin added to each country's own bounding box. A track point further
 # outside than this cannot be within the landfall threshold of that coast, and
 # 2 degrees is about 220 km at these latitudes.
+# Lề tối thiểu của hộp bao khi người gọi không nói cần bán kính bao nhiêu.
+#
 # Hộp bao chỉ để loại nhanh điểm ở xa trước khi đo từng điểm bờ, nên lề của nó
-# PHẢI rộng hơn bán kính lớn nhất từng hỏi tới — hiện là MARITIME_ZONE_KM (370
-# km ≈ 3,33°). Để lề 2° thì bão cách bờ 222–370 km rơi ra ngoài hộp, hàm trả về
-# "không rõ", và cờ vùng biển đọc thành "ngoài vùng biển" — đúng dải mà bão tiến
-# vào Việt Nam từ phía đông đi qua. 4° ≈ 444 km, còn dư chỗ.
-_BOX_MARGIN_DEGREES = 4.0
+# phải rộng hơn bán kính mà người gọi đang hỏi — nếu không, điểm nằm trong bán
+# kính ấy mà ngoài hộp sẽ bị trả về "không rõ", và cái sai đó hoàn toàn im lặng.
+# Đã dính đúng một lần: lề 2° (222 km) với vùng biển 370 km làm cả nửa ngoài
+# vùng biển câm. Nên bán kính giờ được TRUYỀN VÀO, xem `nearest_coast_in`.
+_BOX_MARGIN_DEGREES = 2.0
 
 _COUNTRY_COAST: dict[str, list[tuple[str, float, float]]] = {}
 _COUNTRY_BOX: dict[str, tuple[float, float, float, float]] = {}
@@ -299,11 +301,10 @@ def _by_country() -> dict[str, list[tuple[str, float, float]]]:
         for country, points in _COUNTRY_COAST.items():
             lats = [lat for _, lat, _ in points]
             lons = [lon for _, _, lon in points]
+            # Lưu hộp THÔ, chưa cộng lề: lề phụ thuộc bán kính mà người gọi
+            # cần, và cùng một nước được hỏi với nhiều bán kính khác nhau.
             _COUNTRY_BOX[country] = (
-                min(lats) - _BOX_MARGIN_DEGREES,
-                max(lats) + _BOX_MARGIN_DEGREES,
-                min(lons) - _BOX_MARGIN_DEGREES,
-                max(lons) + _BOX_MARGIN_DEGREES,
+                min(lats), max(lats), min(lons), max(lons)
             )
     return _COUNTRY_COAST
 
@@ -314,7 +315,10 @@ def landfall_countries() -> tuple[str, ...]:
 
 
 def nearest_coast_in(
-    country: str, latitude: float, longitude: float
+    country: str,
+    latitude: float,
+    longitude: float,
+    within_km: float | None = None,
 ) -> tuple[str | None, float | None]:
     """Nearest point on one country's coast, and its distance in km.
 
@@ -323,13 +327,29 @@ def nearest_coast_in(
     This one only ever answers with the country asked for, so a typhoon
     crossing Luzon on its way to Quảng Trị still has a Vietnamese landfall to
     report. Vietnam comes back named by province, everywhere else by country.
+
+    `within_km` is the radius the caller cares about, and it sizes the box used
+    to reject distant points before measuring any of them. Pass it whenever the
+    answer matters beyond a couple of hundred kilometres: without it a point
+    genuinely inside the radius but outside the default margin comes back as
+    "no answer", and nothing about that failure is visible. Landfall detection
+    passes its own 80 km threshold and keeps a tight, cheap box; the range check
+    passes 1000 km and accepts a wider scan, which it can afford because it runs
+    once per storm rather than once per track point.
     """
     points = _by_country().get(country)
     if not points:
         return None, None
 
+    margin = max(_BOX_MARGIN_DEGREES, (within_km or 0) / 111.0)
+    # Một độ kinh tuyến ngắn dần về phía cực, nên lề theo kinh độ phải rộng hơn
+    # lề theo vĩ độ đúng bằng 1/cos(vĩ độ). Không chia thì hộp hụt ở hai đầu.
+    thu_hep = math.cos(math.radians(min(abs(latitude), 80.0)))
+    margin_lon = margin / max(thu_hep, 0.2)
+
     low_lat, high_lat, low_lon, high_lon = _COUNTRY_BOX[country]
-    if not (low_lat <= latitude <= high_lat and low_lon <= longitude <= high_lon):
+    if not (low_lat - margin <= latitude <= high_lat + margin
+            and low_lon - margin_lon <= longitude <= high_lon + margin_lon):
         return None, None
 
     name, best = None, None
@@ -390,9 +410,16 @@ def _interpolate(
 def _nearest_land(
     country: str | None, latitude: float, longitude: float
 ) -> tuple[str | None, float | None]:
-    """Nearest coast, either anywhere or restricted to one country."""
+    """Nearest coast, either anywhere or restricted to one country.
+
+    The radius that matters here is the landfall threshold, a hundred kilometres
+    at most, so the country box stays tight — this runs for every track point of
+    every model of every storm.
+    """
     if country:
-        return nearest_coast_in(country, latitude, longitude)
+        return nearest_coast_in(
+            country, latitude, longitude, within_km=LANDFALL_THRESHOLD_KM
+        )
     return nearest_coast(latitude, longitude)
 
 
@@ -1079,23 +1106,22 @@ def _measure_landfall(
 
 
 def _beyond_horizon(
-    landfall: dict[str, Any] | None, in_maritime_zone: bool = False
+    landfall: dict[str, Any] | None, to_coast_km: float | None
 ) -> bool:
-    """Whether a crossing is too far off in every sense to be worth reporting.
+    """Whether a crossing is too far off to be worth reporting.
 
-    Any one of three things being close enough is sufficient, and each catches a
-    case the others miss:
+    Two conditions, either one enough, and both measured against the country
+    being watched rather than against where you live:
 
-    * **Time** — a storm two days out matters even from 1500 km away.
-    * **Distance to the crossing** — one 400 km from where it comes ashore
-      matters even if it is crawling and takes four days to get there.
-    * **Already in the country's waters** — and this is the one the first two
-      miss. A storm sitting off the coast that will loop before coming ashore
-      has a long track and a distant landfall time, so both figures above fail
-      it; but it is in your waters right now, and that is not something to go
-      quiet about. `MARITIME_ZONE_KM` is what "in your waters" means here.
+    * **Time** — hours until the storm crosses that country's coast. A storm two
+      days out matters wherever in the country it is heading.
+    * **Distance** — from the storm to the nearest point of that country's
+      coast. Not to the forecast landfall point: a storm can sit 300 km off Cà
+      Mau and be forecast to loop 1800 km before coming ashore, and measuring
+      the track would call that far away when it is not.
 
-    Only when all three fail is the estimate speculation rather than a warning.
+    `to_coast_km` is None when the storm is nowhere near the country at all,
+    which fails the distance condition as it should.
 
     A crossing that has already happened has negative hours and passes on time,
     which is what should happen: a storm that came ashore yesterday is news.
@@ -1103,19 +1129,15 @@ def _beyond_horizon(
     if not landfall:
         return False
 
-    if in_maritime_zone:
-        return False
-
     hours = landfall.get("hours_away")
     if hours is not None and hours <= LANDFALL_HORIZON_HOURS:
         return False
 
-    distance = landfall.get("distance_from_storm_km")
-    if distance is not None and distance <= LANDFALL_RANGE_KM:
+    if to_coast_km is not None and to_coast_km <= LANDFALL_RANGE_KM:
         return False
 
-    # No figure available means no gate can pass it. Saying nothing is the safer
-    # failure for a warning.
+    # No figure available means no condition can pass it. Saying nothing is the
+    # safer failure for a warning.
     return True
 
 
@@ -1205,13 +1227,18 @@ async def _add_storm_detail(
         language=language,
     )
 
-    # Has the storm entered that country's waters yet? Answered from the
-    # distance to its coast, which stands in for an EEZ boundary — see
-    # MARITIME_ZONE_KM. None when the storm is nowhere near the country at all.
+    # Bão đã vào vùng biển nước đó chưa. Chỉ để HIỂN THỊ: cổng chặn dùng chính
+    # khoảng cách này nhưng với ngưỡng LANDFALL_RANGE_KM rộng hơn nhiều, nên cờ
+    # 370 km không thêm được lối qua nào. Nó trả lời một câu khác — "bão đã là
+    # chuyện của mình chưa" — mà một cảnh báo đang bật không nói ra được.
     to_watched_coast = None
     if storm.get("latitude") is not None and storm.get("longitude") is not None:
+        # Bán kính truyền vào phải là ngưỡng LỚN NHẤT sẽ so với con số này, tức
+        # LANDFALL_RANGE_KM — hỏi hẹp hơn thì bão nằm ngoài hộp trả về "không
+        # rõ" và trượt cổng chặn một cách im lặng.
         _, to_watched_coast = nearest_coast_in(
-            country, storm["latitude"], storm["longitude"]
+            country, storm["latitude"], storm["longitude"],
+            within_km=LANDFALL_RANGE_KM,
         )
     storm["distance_to_watched_coast_km"] = to_watched_coast
     storm["in_maritime_zone"] = (
@@ -1223,7 +1250,7 @@ async def _add_storm_detail(
     # rather than dropped, under a name the sensor reports separately, so a
     # dashboard can still show "something may be coming" without the main line
     # naming a province and an hour it cannot stand behind.
-    beyond = _beyond_horizon(watched, storm["in_maritime_zone"])
+    beyond = _beyond_horizon(watched, to_watched_coast)
     storm["landfall_watched_beyond"] = watched if beyond else None
     if beyond:
         watched = None
