@@ -75,6 +75,14 @@ _TEXT: dict[str, dict[str, str]] = {
         "landfall_force_past": "cấp {beaufort} khi vào bờ",
         "landfall_force_forecast": "cấp {beaufort} khi đổ bộ",
         "landfall_model": " (theo {model})",
+        # Bao nhiêu mô hình cùng cho ra một điểm đổ bộ, và chúng lệch nhau
+        # bao xa — thước đo trung thực cho việc tin nơi và giờ nói ở trên.
+        "landfall_model_spread": (
+            " (theo {model}; {agree}/{total} mô hình cùng hướng, lệch {km} km)"
+        ),
+        "landfall_model_lone": (
+            " (theo {model}; chỉ {agree}/{total} mô hình cho vào bờ)"
+        ),
         # Cơn bão nào, đứng trước câu dự báo đổ bộ.
         "landfall_named": "{storm}: {line}",
         # Sensor states with nothing to report.
@@ -82,6 +90,7 @@ _TEXT: dict[str, dict[str, str]] = {
         "movement_unknown": "Chưa xác định hướng di chuyển",
         "landfall_unknown": "Chưa có dấu hiệu vào đất liền",
         "landfall_none_country": "Không có bão đổ bộ {country}",
+        "bulletin_none": "Chưa có bản tin",
         "minutecast_unavailable": "Không có dữ liệu MinuteCast",
         "minutecast_error": "Lỗi phân tích dữ liệu MinuteCast",
         "health_unknown": "Không rõ",
@@ -130,11 +139,18 @@ _TEXT: dict[str, dict[str, str]] = {
         "landfall_force_past": "force {beaufort} at landfall",
         "landfall_force_forecast": "force {beaufort} at landfall",
         "landfall_model": " (per {model})",
+        "landfall_model_spread": (
+            " (per {model}; {agree} of {total} models agree, {km} km apart)"
+        ),
+        "landfall_model_lone": (
+            " (per {model}; only {agree} of {total} models bring it ashore)"
+        ),
         "landfall_named": "{storm}: {line}",
         "no_storm": "No storms",
         "movement_unknown": "Direction of travel not yet known",
         "landfall_unknown": "No sign of landfall yet",
         "landfall_none_country": "No storm heading for {country}",
+        "bulletin_none": "No bulletin",
         "minutecast_unavailable": "No MinuteCast data",
         "minutecast_error": "Could not read the MinuteCast data",
         "health_unknown": "Unknown",

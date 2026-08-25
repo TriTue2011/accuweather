@@ -28,6 +28,7 @@ from .utils import (
     slugify,
 )
 from .fetcher import HtmlFetcher
+from .nchmf import EMPTY as EMPTY_BULLETINS, get_bulletins
 from .windy import EMPTY_STORMS, get_alerts, get_storms
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +75,9 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         # outage does not read as "the storm is gone".
         self._storms_cache: dict[str, Any] = {}
         self._alerts_cache: list[dict[str, Any]] = []
+        # Same idea for the national bulletins: an unreachable government site
+        # must not read as "no warnings in force".
+        self._bulletins_cache: dict[str, Any] = {}
 
         super().__init__(
             hass,
@@ -279,6 +283,23 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
                     "unreachable", storms.get("count", 0),
                 )
 
+            # Việt Nam's official hazardous-weather bulletins. A separate source
+            # again, scraped from a page with no API, so the same rule applies:
+            # it may fail on its own without taking anything else down.
+            bulletins = dict(EMPTY_BULLETINS)
+            try:
+                bulletins = await get_bulletins(self.fetcher)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "NCHMF bulletins unavailable this cycle: %s: %s",
+                    type(err).__name__, err,
+                )
+            if bulletins.get("available"):
+                self._bulletins_cache = bulletins
+            elif self._bulletins_cache.get("count"):
+                bulletins = dict(self._bulletins_cache)
+                bulletins["stale"] = True
+
             return {
                 "current": current_weather,
                 "daily_forecast": daily_forecast or [],
@@ -288,6 +309,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
                 "minutecast": minutecast,
                 "storms": storms,
                 "alerts": alerts,
+                "bulletins": bulletins,
                 "latitude": self.latitude,
                 "longitude": self.longitude,
                 "location_key": self.location_key,

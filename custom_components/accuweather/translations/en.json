@@ -117,6 +117,7 @@
       "storm_landfall": { "name": "Nearest storm landfall" },
       "weather_alerts": { "name": "Weather alerts" },
       "storm_slot": { "name": "Storm {number}" },
+      "nchmf_bulletin": { "name": "NCHMF hazard bulletin" },
       "health_asthma": { "name": "Asthma" },
       "health_arthritis": { "name": "Arthritis" },
       "health_migraine": { "name": "Migraine" },

@@ -28,9 +28,12 @@ from .const import (
     COAST_LOOKUP_MAX_KM,
     COUNTRY_NAME_EN,
     DEFAULT_LANDFALL_COUNTRY,
+    LANDFALL_MAX_STEPS,
     LANDFALL_MODEL_PRIORITY,
     LANDFALL_OBSERVED_KM,
+    LANDFALL_REFINE_KM,
     LANDFALL_RECENT_HOURS,
+    LANDFALL_STEP_KM,
     LANDFALL_THRESHOLD_KM,
     STORM_NEARBY_RADIUS_KM,
     STORM_SLOTS,
@@ -329,44 +332,213 @@ def nearest_coast_in(
     return name, best
 
 
+def _blend_time(start: str | None, end: str | None, fraction: float) -> str | None:
+    """A timestamp `fraction` of the way from `start` to `end`."""
+    if not start or not end:
+        return start or end
+    try:
+        first = datetime.fromisoformat(str(start))
+        last = datetime.fromisoformat(str(end))
+    except (TypeError, ValueError):
+        return start
+    return (first + (last - first) * fraction).isoformat()
+
+
+def _interpolate(
+    start: dict[str, Any], end: dict[str, Any], fraction: float
+) -> dict[str, Any]:
+    """A track point `fraction` of the way between two real ones.
+
+    Position, intensity and time are all blended linearly. Over a segment of a
+    few hundred kilometres that is well within the spread of the forecast
+    itself, and it is what turns a 24-hour track step into a landfall time
+    worth printing.
+    """
+    def blend(key: str) -> float | None:
+        first, last = start.get(key), end.get(key)
+        if first is None or last is None:
+            return None
+        return first + (last - first) * fraction
+
+    longitude = blend("longitude")
+    start_lon, end_lon = start.get("longitude"), end.get("longitude")
+    if start_lon is not None and end_lon is not None and abs(end_lon - start_lon) > 180:
+        # The segment crosses the antimeridian. Blending the raw values would
+        # send the interpolated point the long way round the globe, through the
+        # wrong hemisphere.
+        shifted = end_lon + (360 if end_lon < start_lon else -360)
+        longitude = start_lon + (shifted - start_lon) * fraction
+        longitude = (longitude + 180) % 360 - 180
+
+    return {
+        "latitude": blend("latitude"),
+        "longitude": longitude,
+        "wind_speed_kmh": blend("wind_speed_kmh"),
+        "pressure_hpa": blend("pressure_hpa"),
+        "time": _blend_time(start.get("time"), end.get("time"), fraction),
+    }
+
+
+def _nearest_land(
+    country: str | None, latitude: float, longitude: float
+) -> tuple[str | None, float | None]:
+    """Nearest coast, either anywhere or restricted to one country."""
+    if country:
+        return nearest_coast_in(country, latitude, longitude)
+    return nearest_coast(latitude, longitude)
+
+
+def _measured_track(
+    track: list[dict[str, Any]], country: str | None
+) -> list[tuple[dict[str, Any], str | None, float | None]]:
+    """Track points with their distance to the coast, refined near land.
+
+    A forecast step of 400-650 km — which is what JMA sends beyond day two —
+    can start well offshore and end well inland without either end being near
+    the coast, so a plain walk of the track misses the crossing entirely and
+    times the ones it does find to the nearest whole step. Segments with an end
+    within LANDFALL_REFINE_KM of land are therefore cut into LANDFALL_STEP_KM
+    pieces before being measured.
+
+    The refinement is deliberately not applied to the whole track: each measured
+    point costs a coastline lookup, and those run for every model of every storm
+    on every update.
+    """
+    measured: list[tuple[dict[str, Any], str | None, float | None]] = []
+    previous: tuple[dict[str, Any], str | None, float | None] | None = None
+
+    for point in track:
+        lat, lon = point.get("latitude"), point.get("longitude")
+        if lat is None or lon is None:
+            continue
+        current = (point, *_nearest_land(country, lat, lon))
+
+        if previous is not None:
+            near = [d for d in (previous[2], current[2]) if d is not None]
+            gap = distance_km(
+                previous[0]["latitude"], previous[0]["longitude"], lat, lon
+            )
+            if near and min(near) <= LANDFALL_REFINE_KM and gap > LANDFALL_STEP_KM:
+                steps = min(int(gap // LANDFALL_STEP_KM), LANDFALL_MAX_STEPS)
+                for step in range(1, steps):
+                    between = _interpolate(previous[0], point, step / steps)
+                    measured.append(
+                        (
+                            between,
+                            *_nearest_land(
+                                country, between["latitude"], between["longitude"]
+                            ),
+                        )
+                    )
+
+        measured.append(current)
+        previous = current
+
+    return measured
+
+
 def _coast_crossing(
     track: list[dict[str, Any]],
     threshold_km: float,
     language: str = FALLBACK_LANGUAGE,
     country: str | None = None,
 ) -> dict[str, Any] | None:
-    """First point of a track that comes within `threshold_km` of the coast.
+    """Where a track first comes ashore, to the nearest interpolated point.
 
     `country` narrows the search to one country's coast; without it the nearest
     land wins, whichever country that turns out to be.
+
+    Two things separate this from taking the first track point inside the
+    threshold. The track is refined near land first, so a coarse forecast step
+    cannot jump the coast. And once the track is inside the threshold the walk
+    carries on to the point of closest approach, because that is the moment the
+    storm is actually at the coast — the first sample over the line is still up
+    to `threshold_km` out to sea, which on a coarse track was worth hours.
     """
-    for point in track:
-        lat, lon = point.get("latitude"), point.get("longitude")
-        if lat is None or lon is None:
+    measured = _measured_track(track, country)
+
+    for index, (_, _, distance) in enumerate(measured):
+        if distance is None or distance > threshold_km:
             continue
-        province, distance = (
-            nearest_coast_in(country, lat, lon) if country
-            else nearest_coast(lat, lon)
-        )
-        if distance is not None and distance <= threshold_km:
-            return {
-                "province": place_name(province, language),
-                # Kept untranslated: this is the value the landfall country
-                # option is set to, and it is compared against it.
-                "country": _country_of(province),
-                "distance_km": distance,
-                "time": point.get("time"),
-                "latitude": lat,
-                "longitude": lon,
-                "pressure_hpa": point.get("pressure_hpa"),
-                "wind_speed_kmh": point.get("wind_speed_kmh"),
-                "beaufort": beaufort_force(
-                    point["wind_speed_kmh"] / 3.6
-                    if point.get("wind_speed_kmh") is not None
-                    else None
-                ),
-            }
+
+        # Inside the threshold: keep going while the coast is still getting
+        # closer. Once the storm is over land the nearest coastal reference
+        # point starts receding again, and the turning point is the crossing.
+        closest = index
+        for ahead in range(index + 1, len(measured)):
+            next_distance = measured[ahead][2]
+            if next_distance is None or next_distance > measured[closest][2]:
+                break
+            closest = ahead
+
+        point, province, distance = measured[closest]
+        return {
+            "province": place_name(province, language),
+            # Kept untranslated: this is the value the landfall country
+            # option is set to, and it is compared against it.
+            "country": _country_of(province),
+            "distance_km": distance,
+            "time": point.get("time"),
+            "latitude": point.get("latitude"),
+            "longitude": point.get("longitude"),
+            "pressure_hpa": point.get("pressure_hpa"),
+            "wind_speed_kmh": point.get("wind_speed_kmh"),
+            "beaufort": beaufort_force(
+                point["wind_speed_kmh"] / 3.6
+                if point.get("wind_speed_kmh") is not None
+                else None
+            ),
+        }
     return None
+
+
+def _add_spread(
+    chosen: dict[str, Any], crossings: dict[str, dict[str, Any]], models_total: int
+) -> None:
+    """Record how far apart the models put the same landfall, in place.
+
+    A landfall every model agrees on within 40 km is a different warning from
+    one where the models are strung out over four provinces, and until now the
+    tracks that disagreed were fetched, ignored and thrown away. The figures go
+    on the crossing that was chosen so the sentence can quote them.
+    """
+    chosen["models"] = sorted(crossings)
+    chosen["models_agreeing"] = len(crossings)
+    chosen["models_total"] = max(models_total, len(crossings))
+    chosen["places"] = sorted(
+        {hit["province"] for hit in crossings.values() if hit.get("province")}
+    )
+
+    points = [
+        (hit["latitude"], hit["longitude"])
+        for hit in crossings.values()
+        if hit.get("latitude") is not None and hit.get("longitude") is not None
+    ]
+    # Left unset with a single crossing to compare: "0 km apart" would read as
+    # perfect agreement, when in fact nothing agreed with anything.
+    gaps = [
+        distance_km(first[0], first[1], second[0], second[1])
+        for index, first in enumerate(points)
+        for second in points[index + 1:]
+    ]
+    chosen["spread_km"] = round(max(gaps), 1) if gaps else None
+
+    stamps = []
+    for hit in crossings.values():
+        try:
+            stamp = datetime.fromisoformat(str(hit.get("time")))
+        except (TypeError, ValueError):
+            continue
+        # The feed stamps everything in UTC; an interpolated point keeps
+        # whatever its ends carried. Mixing the two would raise on comparison.
+        stamps.append(
+            stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+        )
+    chosen["spread_hours"] = (
+        round((max(stamps) - min(stamps)).total_seconds() / 3600, 1)
+        if len(stamps) > 1
+        else None
+    )
 
 
 def predict_landfall(
@@ -375,6 +547,7 @@ def predict_landfall(
     threshold_km: float = LANDFALL_THRESHOLD_KM,
     language: str = FALLBACK_LANGUAGE,
     country: str | None = None,
+    with_spread: bool = False,
 ) -> dict[str, Any] | None:
     """Work out where a storm's track meets the coast, past or future.
 
@@ -415,6 +588,8 @@ def predict_landfall(
     ordered = [m for m in LANDFALL_MODEL_PRIORITY if m in forecasts]
     ordered += [m for m in sorted(forecasts) if m not in ordered]
 
+    crossings: dict[str, dict[str, Any]] = {}
+    models_total = 0
     for model in ordered:
         # A forecast run starts at its reference time, which is already hours
         # old by the time it is published. Its opening points would otherwise
@@ -424,11 +599,27 @@ def predict_landfall(
             for point in (forecasts[model].get("track") or [])
             if (hours := hours_until(point.get("time"))) is None or hours > 0
         ]
+        if not track:
+            continue
+        models_total += 1
         if hit := _coast_crossing(track, threshold_km, language, country):
             hit["model"] = model
             hit["status"] = "forecast"
-            return hit
-    return None
+            crossings[model] = hit
+            # Without a spread to report there is nothing to gain from the
+            # remaining models, and every one of them costs coastline lookups.
+            if not with_spread:
+                break
+
+    if not crossings:
+        return None
+
+    # Still the most trusted model that reaches the coast, as before; the others
+    # only say how much confidence to put in it.
+    chosen = crossings[next(model for model in ordered if model in crossings)]
+    if with_spread:
+        _add_spread(chosen, crossings, models_total)
+    return chosen
 
 
 def local_time_text(raw: str | None) -> str | None:
@@ -600,7 +791,28 @@ def describe_landfall(
 
     line = ", ".join(parts)
     if not past:
-        line += text(language, "landfall_model", model=landfall["model"].upper())
+        model = landfall["model"].upper()
+        # With more than one model to compare against, say how many of them put
+        # the storm on the same coast and how far apart they are. A landfall
+        # every model agrees on reads very differently from a lone outlier.
+        total = landfall.get("models_total") or 0
+        agree = landfall.get("models_agreeing") or 1
+        spread = landfall.get("spread_km")
+        if total > 1 and agree > 1 and spread is not None:
+            line += text(
+                language, "landfall_model_spread",
+                model=model, agree=agree, total=total, km=round(spread),
+            )
+        elif total > 1:
+            # One model out of several taking the storm ashore is a forecast
+            # worth showing and worth doubting, and saying so is the whole
+            # point of having counted.
+            line += text(
+                language, "landfall_model_lone",
+                model=model, agree=agree, total=total,
+            )
+        else:
+            line += text(language, "landfall_model", model=model)
     if storm_name:
         line = text(language, "landfall_named", storm=storm_name, line=line)
     return line
@@ -925,14 +1137,16 @@ async def _add_storm_detail(
     # question as where it first meets land: a typhoon that crosses Luzon has
     # made landfall long before it reaches Quảng Trị, and the Philippine
     # crossing is the one the estimate above reports.
-    if landfall and landfall.get("country") == country:
-        # The nearest land already is that country, so it is the same crossing.
-        watched = landfall
-    else:
-        watched = predict_landfall(
-            forecasts, history, language=language, country=country
-        )
-        _measure_landfall(watched, storm, latitude, longitude)
+    #
+    # Worked out on its own even when the nearest land already is that country
+    # and the crossing comes out identical: this is the one the landfall sensor
+    # reads, so it is the one that carries the spread between the models, and
+    # restricting the search to a single country's box is the cheap direction
+    # to spend those extra model scans in.
+    watched = predict_landfall(
+        forecasts, history, language=language, country=country, with_spread=True,
+    )
+    _measure_landfall(watched, storm, latitude, longitude)
 
     storm["landfall"] = landfall
     storm["landfall_text"] = describe_landfall(

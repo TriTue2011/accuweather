@@ -90,6 +90,25 @@ LANDFALL_OBSERVED_KM = 45
 # crossing said nothing about where the storm actually was.
 LANDFALL_RECENT_HOURS = 72
 
+# Forecast tracks are not evenly spaced in time. Measured against the live feed:
+# JMA runs 3-hourly for the first day and then jumps to 21-24 hour steps, which
+# carry the storm 400-650 km at a time — far enough to step clean over a coast,
+# and far too coarse to time a landfall from. Near-shore segments are therefore
+# subdivided before the crossing is looked for.
+#
+# Only segments with an end this close to land are subdivided: doing it to the
+# whole track would cost thousands of coastline lookups on every update, and a
+# segment out in open ocean cannot contain a crossing anyway.
+LANDFALL_REFINE_KM = 250
+
+# How finely a near-shore segment is cut up. Roughly the distance a fast storm
+# covers in an hour, so the interpolated landfall time is good to about that.
+LANDFALL_STEP_KM = 15
+
+# A ceiling on the subdivision, so one absurd track segment cannot stall an
+# update. 40 steps covers a 600 km jump, the worst seen in the JMA tail.
+LANDFALL_MAX_STEPS = 40
+
 # Beyond this there is no land in the tracked basin, so no landfall is guessed.
 # Naming a coast 3000 km away told people nothing except that the answer was
 # forced: a storm off Tokyo was reported against the coast of Quảng Ninh.

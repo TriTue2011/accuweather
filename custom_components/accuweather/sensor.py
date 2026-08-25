@@ -36,9 +36,13 @@ from .const import (
 from .coordinator import AccuWeatherDataUpdateCoordinator
 from .device import get_device_info
 from .i18n import text
-from .windy import place_name
+from .nchmf import NCHMF_URL
+from .windy import place_name, storm_headline
 
 _LOGGER = logging.getLogger(__name__)
+
+# Home Assistant rejects a state longer than this, taking the entity with it.
+MAX_STATE_LENGTH = 255
 
 # Mapping from sensor key to API pollutant key
 _POLUTANT_KEY_MAP: dict[str, str] = {
@@ -294,6 +298,9 @@ async def async_setup_entry(
     for slot in range(STORM_SLOTS):
         entities.append(AccuWeatherStormSensor(coordinator, slot, names))
 
+    # Việt Nam's official bulletins, a source of its own next to Windy.
+    entities.append(AccuWeatherBulletinSensor(coordinator, names))
+
     # Add dynamic health activity sensors
     health_count = 0
     if coordinator.data and "health_activities" in coordinator.data:
@@ -380,20 +387,70 @@ async def async_name_overrides(
     return SensorNames(display=display, object_id=object_id)
 
 
-def watched_landfall(storms: dict[str, Any]) -> dict[str, Any] | None:
-    """The nearest storm whose track reaches the coast being watched.
+def watched_landfalls(storms: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every storm whose track reaches the coast being watched, soonest first.
 
     Which coast that is comes from the landfall country chosen when the entry
-    was set up. The list is already sorted by distance from the configured
-    location, so the first match is the nearest such storm. Only the storms
-    close enough to have their track fetched — STORM_SLOTS of them — carry a
-    landfall estimate at all, which is the practical limit on how far ahead
-    this can look.
+    was set up. More than one storm can be heading for the same country, so
+    this returns all of them rather than the first one found.
+
+    Crossings still to come are ordered by arrival time and come before ones
+    that have already happened, which are ordered most recent first. A storm
+    that has just landed is still the weather, but it is not the one to warn
+    about while another is inbound.
+
+    Only the storms close enough to have their track fetched — STORM_SLOTS of
+    them — carry a landfall estimate at all, which is the practical limit on
+    how far ahead this can look.
     """
+    forecast: list[dict[str, Any]] = []
+    past: list[dict[str, Any]] = []
     for storm in storms.get("storms") or ():
-        if storm.get("landfall_watched"):
-            return storm
-    return None
+        landfall = storm.get("landfall_watched")
+        if not landfall:
+            continue
+        (past if landfall.get("status") == "past" else forecast).append(storm)
+
+    # ISO timestamps sort correctly as text. A crossing with no time sorts last
+    # among the forecasts and first among the past ones, which in both cases
+    # keeps it behind every crossing that does carry one.
+    forecast.sort(key=lambda s: str(s["landfall_watched"].get("time") or "9999"))
+    past.sort(key=lambda s: str(s["landfall_watched"].get("time") or ""), reverse=True)
+    return forecast + past
+
+
+def watched_landfall(storms: dict[str, Any]) -> dict[str, Any] | None:
+    """The storm coming ashore soonest on the coast being watched.
+
+    Not the nearest one: a faster storm further out can reach the coast first,
+    and that is the one a warning is about.
+    """
+    inbound = watched_landfalls(storms)
+    return inbound[0] if inbound else None
+
+
+def landfall_summary(storm: dict[str, Any]) -> dict[str, Any]:
+    """One storm's crossing of the watched coast, flattened for a card."""
+    landfall = storm.get("landfall_watched") or {}
+    return {
+        "name": storm.get("name"),
+        "headline": storm_headline(storm),
+        "province": landfall.get("province"),
+        "time": landfall.get("time"),
+        "time_text": landfall.get("time_text"),
+        "hours_away": landfall.get("hours_away"),
+        "status": landfall.get("status"),
+        "model": landfall.get("model"),
+        "beaufort": landfall.get("beaufort"),
+        "models_agreeing": landfall.get("models_agreeing"),
+        "models_total": landfall.get("models_total"),
+        "spread_km": landfall.get("spread_km"),
+        "spread_hours": landfall.get("spread_hours"),
+        "places": landfall.get("places"),
+        "distance_to_landfall_km": landfall.get("distance_from_storm_km"),
+        "landfall_distance_from_home_km": landfall.get("distance_from_home_km"),
+        "text": storm.get("landfall_watched_text"),
+    }
 
 
 def landfall_attributes(
@@ -418,6 +475,18 @@ def landfall_attributes(
         "landfall_beaufort": landfall.get("beaufort"),
         "landfall_wind_speed_kmh": landfall.get("wind_speed_kmh"),
         "landfall_model": landfall.get("model"),
+        # How much the forecast models disagree about this same landfall, which
+        # is the honest measure of how much to trust the place and the hour
+        # above. Present only on the watched-coast estimate, where every model
+        # is checked rather than only the most trusted one that reaches land.
+        "landfall_models": landfall.get("models"),
+        "landfall_models_agreeing": landfall.get("models_agreeing"),
+        "landfall_models_total": landfall.get("models_total"),
+        "landfall_spread_km": landfall.get("spread_km"),
+        "landfall_spread_hours": landfall.get("spread_hours"),
+        # Every stretch of coast the models name, so a card can show the range
+        # rather than the single most-trusted answer.
+        "landfall_places": landfall.get("places"),
         # How much further the storm has to travel, and how long that leaves.
         "distance_to_landfall_km": landfall.get("distance_from_storm_km"),
         "hours_to_landfall": landfall.get("hours_away"),
@@ -671,6 +740,88 @@ class AccuWeatherSensorEntity(
         return attrs
 
 
+class AccuWeatherBulletinSensor(
+    AccuWeatherNameMixin,
+    CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
+    SensorEntity,
+):
+    """The latest hazardous-weather bulletin from Việt Nam's forecast centre.
+
+    Deliberately not a count: the page keeps months of old bulletins below the
+    current ones, so the number barely moves and would never trigger anything.
+    The headline does change with every new bulletin, which is what an
+    automation can act on.
+    """
+
+    _attr_icon = "mdi:bullhorn-variant"
+
+    def __init__(
+        self,
+        coordinator: AccuWeatherDataUpdateCoordinator,
+        names: SensorNames | None = None,
+    ) -> None:
+        """Initialize the national bulletin sensor."""
+        super().__init__(coordinator)
+        self.entity_description = SensorEntityDescription(
+            key="nchmf_bulletin",
+            translation_key="nchmf_bulletin",
+            icon="mdi:bullhorn-variant",
+        )
+        self._apply_names(names, "nchmf_bulletin")
+        self._attr_unique_id = (
+            f"accuweather_{coordinator.location_key}_nchmf_bulletin"
+        )
+        self._attr_device_info = get_device_info(
+            coordinator.location_key, coordinator.location_name
+        )
+
+    @property
+    def _bulletins(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get("bulletins") or {}
+
+    @property
+    def native_value(self) -> str | None:
+        """The headline of the most recent bulletin."""
+        latest = self._bulletins.get("latest") or {}
+        title = latest.get("title")
+        if not title:
+            return text(self.coordinator.language, "bulletin_none")
+        # Home Assistant refuses a state over 255 characters. The longest
+        # headline seen is 119, but a truncated state beats an unavailable one.
+        return title if len(title) <= MAX_STATE_LENGTH else (
+            title[: MAX_STATE_LENGTH - 1] + "…"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The bulletin list, and what the newest one is about."""
+        bulletins = self._bulletins
+        latest = bulletins.get("latest") or {}
+        attrs: dict[str, Any] = {
+            "issued": latest.get("issued"),
+            "issued_text": latest.get("issued_text"),
+            "url": latest.get("url"),
+            # "bão", "lũ", "biển", "mưa", "nắng nóng", "rét" or "khác", so an
+            # automation can act on storms alone.
+            "category": latest.get("category"),
+            # The official Vietnamese storm number, which the Windy feed never
+            # carries: it names storms internationally (Kajiki) while the
+            # bulletins number them by basin entry (bão số 4).
+            "storm_number": latest.get("storm_number"),
+            "count": bulletins.get("count", 0),
+            # How many were issued in the last day. The page keeps a long tail
+            # of old bulletins, so this is what tells an active spell from a
+            # quiet one.
+            "recent_count": bulletins.get("recent_count", 0),
+            "bulletins": bulletins.get("bulletins") or [],
+            "source": bulletins.get("source") or NCHMF_URL,
+        }
+        if bulletins.get("stale"):
+            # The site was unreachable; this is the last list that arrived.
+            attrs["stale"] = True
+        return attrs
+
+
 class AccuWeatherStormSummarySensor(
     AccuWeatherNameMixin,
     CoordinatorEntity[AccuWeatherDataUpdateCoordinator],
@@ -784,10 +935,11 @@ class AccuWeatherStormSummarySensor(
 
         if key == "storm_landfall":
             # The state only speaks about a landfall on the watched coast, so
-            # this has to be the storm that state is about — not necessarily
-            # the nearest one — and that crossing rather than wherever the
-            # storm first met land.
-            storm = watched_landfall(storms) or {}
+            # this has to be the storm that state is about — the one ashore
+            # soonest, not necessarily the nearest — and that crossing rather
+            # than wherever the storm first met land.
+            inbound = watched_landfalls(storms)
+            storm = inbound[0] if inbound else {}
             landfall = storm.get("landfall_watched")
             # Both always present, so a card can hide the row without reading
             # the sentence, and can name the coast being watched.
@@ -795,6 +947,11 @@ class AccuWeatherStormSummarySensor(
                 self.coordinator.landfall_country, self.coordinator.language
             )
             attrs["landfall_in_country"] = bool(landfall)
+            # The state has room for one storm. In a busy season more than one
+            # can be heading for the same coast, and a card or an automation
+            # reading only the sentence would never learn about the second.
+            attrs["landfall_count"] = len(inbound)
+            attrs["landfall_storms"] = [landfall_summary(s) for s in inbound]
         else:
             storm = storms.get("nearest") or {}
             landfall = storm.get("landfall")

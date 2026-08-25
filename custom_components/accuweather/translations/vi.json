@@ -117,6 +117,7 @@
       "storm_landfall": { "name": "Dự báo đổ bộ bão gần nhất" },
       "weather_alerts": { "name": "Cảnh báo thời tiết" },
       "storm_slot": { "name": "Bão {number}" },
+      "nchmf_bulletin": { "name": "Bản tin thời tiết nguy hiểm" },
       "health_asthma": { "name": "Hen suyễn" },
       "health_arthritis": { "name": "Viêm khớp" },
       "health_migraine": { "name": "Đau nửa đầu" },

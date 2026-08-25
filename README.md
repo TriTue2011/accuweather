@@ -21,8 +21,20 @@ Component tích hợp thông tin thời tiết và chất lượng không khí V
 - **Hướng di chuyển** viết bằng chữ, ví dụ „Di chuyển hướng Tây Bắc, 21 km/h", suy ra từ hai điểm quỹ đạo gần nhất
 - **Dự kiến vào đất liền** (trên từng sensor `Storm 1/2/3`): nơi đường bão gặp đất liền đầu tiên — tỉnh ven biển nếu là Việt Nam, tên nước nếu là chỗ khác — kèm thời điểm, ví dụ „Dự kiến vào Quảng Bình khoảng 12:00 13/08 (theo JMA)". Đường đi lấy theo thứ tự tin cậy JMA → ECMWF → các mô hình khác, và quỹ đạo quá khứ lẫn dự báo được lưu trong thuộc tính để vẽ lên bản đồ
 - **Sensor `Nearest Storm Landfall` chỉ nói chuyện đổ bộ vào quốc gia bạn chọn** — chọn lúc cài đặt, mặc định là quốc gia của địa điểm bạn thêm, đổi lại được trong Tùy chọn. Có cơn nào cắt vào bờ nước đó thì nó ghi tên cơn bão, nơi sắp vào (tỉnh nếu là Việt Nam), thời điểm, khoảng cách còn lại và khoảng cách từ chỗ bạn: „Bão Kajiki: Dự kiến vào Quảng Trị khoảng 22:00 25/08, còn khoảng 380 km (~18 giờ nữa), cách bạn 210 km, cấp 13 khi đổ bộ (theo JMA)". Không có cơn nào thì chỉ một dòng „Không có bão đổ bộ Việt Nam", kèm thuộc tính `landfall_in_country: false` để dashboard ẩn thẻ đi (`watched_country` cho biết đang theo dõi nước nào). Bão vòng qua Philippines rồi mới sang Việt Nam vẫn tính đúng: điểm cắt bờ của nước đang theo dõi được dò riêng, chứ không lấy chỗ bão gặp đất liền đầu tiên
+- **Nhiều cơn cùng hướng vào một nước**: câu trạng thái kể về cơn **vào bờ sớm nhất**, không phải cơn đang gần bạn nhất — một cơn ở xa hơn nhưng đi nhanh hơn vẫn có thể vào trước. Các cơn còn lại nằm trong hai thuộc tính của chính sensor đó: `landfall_count` đếm bao nhiêu cơn sẽ vào bờ nước bạn theo dõi, `landfall_storms` liệt kê từng cơn theo thứ tự vào bờ, mỗi mục có tên bão, nơi vào, thời điểm, số giờ còn lại, cấp gió khi đổ bộ, khoảng cách từ chỗ bạn và sẵn một câu chữ để hiện thẳng lên thẻ. Cơn đã đổ bộ xếp sau các cơn còn đang tới
+- **Giờ đổ bộ được nội suy, không làm tròn theo bước dự báo**: quỹ đạo JMA chạy 3 giờ một điểm trong ngày đầu rồi giãn ra 21–24 giờ, mỗi bước đưa bão đi 400–650 km — đủ xa để bước qua luôn bờ biển mà không điểm nào nằm gần bờ. Đoạn quỹ đạo nào có đầu mút trong vòng 250 km quanh đất liền sẽ được chia nhỏ 15 km một bước trước khi dò, rồi lấy đúng điểm áp sát bờ nhất. Đo trên dữ liệu thật: mốc đổ bộ theo ECMWF lùi lại 9,6 giờ và sát bờ hơn 48 km so với cách cũ
+- **Các mô hình đồng thuận tới đâu**: thay vì chỉ lấy mô hình tin cậy nhất rồi bỏ phần còn lại, mọi mô hình có quỹ đạo đều được dò điểm cắt bờ. Câu trạng thái nói thẳng „3/3 mô hình cùng hướng, lệch 95 km" hoặc „chỉ 1/3 mô hình cho vào bờ" — một dự báo 6 ngày mà chỉ một mô hình ủng hộ trông rất khác một dự báo cả ba cùng chỉ vào một tỉnh. Thuộc tính `landfall_models`, `landfall_models_agreeing`, `landfall_models_total`, `landfall_spread_km`, `landfall_spread_hours` và `landfall_places` mang số liệu đầy đủ
 - Cảnh báo thời tiết chính thức (CAP) cho vị trí đã chọn
-- Khi không có bão nào: các sensor báo „Không có bão", `Storm Count` = 0. Khi bão tan hoặc bão mới xuất hiện gần hơn, các slot tự xếp lại theo khoảng cách — `Storm 1` luôn là cơn gần bạn nhất.
+
+**Bản tin chính thức Việt Nam (nguồn NCHMF, không cần API key)**
+
+- Cảm biến `Bản tin thời tiết nguy hiểm` đọc trang [thời tiết nguy hiểm](https://www.nchmf.gov.vn/kttv/vi-VN/1/thoi-tiet-nguy-hiem-5-15.html) của Trung tâm Dự báo Khí tượng Thủy văn Quốc gia. Trạng thái là tiêu đề bản tin mới nhất, ví dụ „TIN BÃO TRÊN BIỂN ĐÔNG (Cơn bão số 4)"
+- Đây là nguồn **bổ sung chứ không thay thế** dữ liệu Windy, và hai nguồn trả lời hai câu hỏi khác nhau: Windy nói bão đang ở đâu và đi đâu, NCHMF nói cơ quan có thẩm quyền đã phát tin gì. NCHMF còn cảnh báo cả lũ, rét, nắng nóng, triều cường — những thứ một nguồn bão nhiệt đới không biết
+- **Số hiệu bão Việt Nam** nằm ở thuộc tính `storm_number`: Windy gọi bão theo tên quốc tế (Kajiki), Việt Nam đánh số theo thứ tự vào Biển Đông (bão số 4), và chỉ bản tin NCHMF mang con số đó
+- Thuộc tính khác: `issued` (giờ phát, ISO có múi giờ Việt Nam), `url` (liên kết bản tin gốc), `category` (`bão`, `lũ`, `biển`, `mưa`, `nắng nóng`, `rét` hoặc `khác` — để tự động hoá chỉ bắt tin bão), `recent_count` (số bản tin trong 24 giờ qua, phân biệt lúc đang có việc với lúc yên ắng), và `bulletins` (cả danh sách trên trang)
+- Trang được tải lại 15 phút một lần và **dùng chung cho mọi địa điểm** — bản tin là của cả nước, thêm địa điểm không phát sinh thêm request. Không vào được trang thì giữ nguyên danh sách lần trước và đánh dấu `stale: true`
+- Nội dung bản tin luôn là tiếng Việt vì nguồn chỉ có tiếng Việt; chỉ tên cảm biến đổi theo ngôn ngữ đã chọn
+- Khi không có bão nào: các sensor báo „Không có bão", `Storm Count` = 0. Khi bão tan hoặc bão mới xuất hiện gần hơn, các slot tự xếp lại theo khoảng cách — `Storm 1` luôn là cơn gần bạn nhất. Có ba slot, nên khi `Storm Count` lớn hơn 3, các cơn xa hơn chỉ nằm trong thuộc tính `storms` của `Storm Count` chứ không có sensor riêng.
 - Khi không gọi được Windy: **giữ nguyên số liệu bão lần trước** và đánh dấu thuộc tính `stale: true`, thay vì báo „Không có bão" — đang bão mà sensor tự nhiên nói hết bão là kiểu sai tệ nhất.
 
 **Khác**
@@ -84,6 +96,7 @@ Sau khi cài đặt, các entity sau sẽ được tạo ra:
 - Cảm biến MinuteCast: tóm tắt mưa 2 giờ tới
 - 22 cảm biến sức khỏe & hoạt động
 - Cảm biến bão: `Storm Count`, `Nearby Storm Count`, `Nearest Storm Distance`, `Nearest Storm Movement`, `Nearest Storm Landfall`, `Storm 1`, `Storm 2`, `Storm 3`, `Weather Alerts`
+- Cảm biến bản tin Việt Nam: `Bản tin thời tiết nguy hiểm` (`NCHMF hazard bulletin`)
 
 ### Ví dụ tự động hoá: báo khi bão hướng vào bờ
 
@@ -148,7 +161,8 @@ Tích hợp hỗ trợ hầu hết các quận/huyện của 63 tỉnh thành, b
 
   Nếu vẫn gặp 403, đọc thông báo trong log — nó phân biệt hai trường hợp: đã dùng dấu vết trình duyệt mà vẫn bị chặn (hãy đổi máy chủ VPN hoặc tắt VPN cho Home Assistant), hoặc `curl_cffi` chưa cài được (tìm lỗi cài đặt trong log lúc khởi động). Tích hợp chỉ thử lại 2 lần khi gặp 403 để không kéo dài mỗi lượt cập nhật.
 - Dữ liệu bão lấy từ endpoint công khai của Windy, gộp sẵn JMA, NOAA NHC, UKMO, BoM, IMD cùng các mô hình tự dò trên ECMWF/GFS/ICON. Endpoint này không có tài liệu chính thức nên có thể thay đổi; khi đó các sensor bão sẽ trống chứ không làm hỏng phần thời tiết.
-- **Dự kiến vào đất liền là ước lượng**, tính từ điểm dự báo gần bờ nhất (ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển Việt Nam và đường bờ biển các nước trong vùng. Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi thêm bản tin của Trung tâm Dự báo KTTV Quốc gia.
+- **Dự kiến vào đất liền là ước lượng**, tính từ quỹ đạo dự báo (đã chia nhỏ 15 km một bước ở đoạn gần bờ, ngưỡng 80 km) so với toạ độ tham chiếu của các tỉnh ven biển Việt Nam và đường bờ biển các nước trong vùng. Nội suy làm cho *cách đọc* dự báo chính xác hơn, **không** làm bản thân dự báo đúng hơn — sai số thật nằm ở chỗ các mô hình bất đồng, và đó chính là thứ `landfall_spread_km` cùng `landfall_models_agreeing` nói ra. Điểm mốc bờ biển Việt Nam hiện thưa (28 điểm, mỗi tỉnh một điểm, cách nhau 23–148 km), nên tên tỉnh chỉ nên đọc như „khúc bờ biển quanh đó". Đây không phải bản tin chính thức — khi có bão thật, hãy theo dõi cảm biến `Bản tin thời tiết nguy hiểm` và bản tin của Trung tâm Dự báo KTTV Quốc gia.
+- Bản tin NCHMF được bóc từ HTML của một trang không có API. Trang đổi giao diện thì cảm biến bản tin trống chứ không làm hỏng phần còn lại; trong log gỡ lỗi sẽ có dòng nói trang tải được nhưng không bóc ra bản tin nào.
 - Độ chính xác của dữ liệu thời tiết phụ thuộc AccuWeather; một số khu vực không có đủ dữ liệu chi tiết (ví dụ nơi không có chỉ số phấn hoa hoặc MinuteCast).
 
 ## Phát triển trong tương lai
