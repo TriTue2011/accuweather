@@ -53,9 +53,10 @@ _BODY_STOP = ("Chi tiết tin", "Tin mới", "Tin cùng chuyên mục")
 # rather than inlined. The prose around them carries the situation itself.
 _TABLE_MARK = "[bảng]"
 
-# Enough for the opening paragraph of a bulletin, which is the part that says
-# what is happening; the rest stays in `content`.
-SUMMARY_MAX = 300
+# The summary is what the sensor reads out, and Home Assistant refuses a state
+# longer than 255 characters — it drops the entity rather than truncating. So
+# this is that limit, not a display preference. The rest stays in `content`.
+SUMMARY_MAX = 255
 
 # A cap on the stored body. Attributes are written to the recorder every time
 # they change, and nobody reads a five-page warning off a dashboard tile.

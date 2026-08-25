@@ -11,5 +11,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/TriTue2011/accuweather/issues",
   "requirements": ["beautifulsoup4", "curl_cffi>=0.7"],
-  "version": "2026.8.25.3"
+  "version": "2026.8.25.4"
 }

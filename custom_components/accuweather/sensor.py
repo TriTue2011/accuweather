@@ -749,10 +749,16 @@ class AccuWeatherBulletinSensor(
 ):
     """The latest hazardous-weather bulletin from Việt Nam's forecast centre.
 
+    The state is the opening paragraph of the bulletin — where the storm is,
+    how strong it has become, which way it is going. The headline names the
+    hazard but says none of that, and an attribute is invisible on a default
+    dashboard card, so the half worth reading is the half that gets read out.
+    The headline is kept as the `title` attribute.
+
     Deliberately not a count: the page keeps months of old bulletins below the
     current ones, so the number barely moves and would never trigger anything.
-    The headline does change with every new bulletin, which is what an
-    automation can act on.
+    Either the state or the `issued` attribute changes with every new bulletin,
+    so an automation still has something to act on.
     """
 
     _attr_icon = "mdi:bullhorn-variant"
@@ -783,15 +789,21 @@ class AccuWeatherBulletinSensor(
 
     @property
     def native_value(self) -> str | None:
-        """The headline of the most recent bulletin."""
+        """What the most recent bulletin says, in one paragraph.
+
+        Falls back to the headline when the body could not be fetched: naming
+        the hazard is more use than an empty tile, and the list page is a
+        separate request that may well have succeeded on its own.
+        """
         latest = self._bulletins.get("latest") or {}
-        title = latest.get("title")
-        if not title:
+        value = latest.get("summary") or latest.get("title")
+        if not value:
             return text(self.coordinator.language, "bulletin_none")
-        # Home Assistant refuses a state over 255 characters. The longest
-        # headline seen is 119, but a truncated state beats an unavailable one.
-        return title if len(title) <= MAX_STATE_LENGTH else (
-            title[: MAX_STATE_LENGTH - 1] + "…"
+        # Home Assistant refuses a state over 255 characters, and drops the
+        # entity rather than truncating. Summaries are cut to fit upstream;
+        # this is the guard for a headline that runs long.
+        return value if len(value) <= MAX_STATE_LENGTH else (
+            value[: MAX_STATE_LENGTH - 1] + "…"
         )
 
     @property
@@ -800,6 +812,10 @@ class AccuWeatherBulletinSensor(
         bulletins = self._bulletins
         latest = bulletins.get("latest") or {}
         attrs: dict[str, Any] = {
+            # The headline. It used to be the state; the paragraph the state
+            # carries now is the more useful half, but the headline is what
+            # names the kind of warning, so it stays reachable.
+            "title": latest.get("title"),
             "issued": latest.get("issued"),
             "issued_text": latest.get("issued_text"),
             "url": latest.get("url"),
